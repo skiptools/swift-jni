@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "SwiftJNI",
+    name: "swift-jni",
     products: [
         .library(name: "SwiftJNI", targets: ["SwiftJNI"]),
     ],
