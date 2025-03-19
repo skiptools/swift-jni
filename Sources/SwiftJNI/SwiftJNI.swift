@@ -14,7 +14,6 @@ import Glibc
 #elseif canImport(Musl)
 import Musl
 #elseif os(Windows)
-import CSystem
 import ucrt
 #endif
 

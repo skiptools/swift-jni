@@ -1,5 +1,4 @@
 // Copyright 2023–2025 Skip
-import Testing
 @testable import SwiftJNI
 import XCTest
 
