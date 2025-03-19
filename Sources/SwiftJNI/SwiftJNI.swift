@@ -5,8 +5,17 @@ import FoundationEssentials
 #else
 import Foundation
 #endif
-#if canImport(Android)
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Android)
 import Android
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif os(Windows)
+import CSystem
+import ucrt
 #endif
 
 // MARK: JNI Types
