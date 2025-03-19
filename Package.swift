@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "swift-jni",
     products: [
-        .library(name: "SwiftJNI", targets: ["SwiftJNI"]),
+        .library(name: "SwiftJNI", type: .dynamic, targets: ["SwiftJNI"]),
     ],
     targets: [
         .target(name: "CJNI"),
