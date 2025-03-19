@@ -1164,13 +1164,7 @@ extension JNI {
         }
 
         if jni == nil && launch {
-            #if os(macOS)
             try JNI.launchJavaVM(options: options)
-            #elseif os(Android)
-            throw JVMError(description: "TODO: get jni reference from JNI_GetCreatedJavaVMs")
-            #else
-            throw JVMError(description: "invokeJava cannot be called on iOS; it only works from an Android app running within a JVM")
-            #endif
         }
 
         if jni == nil {
@@ -1178,7 +1172,6 @@ extension JNI {
         }
     }
 
-    #if os(macOS)
     /// Instantiate an embedded Java Virtual Machine.
     /// This is just used in local testing, where a Swift test case needs to be able to call into JNI from a macOS environment
     public static func launchJavaVM(options: JVMOptions = .default) throws {
@@ -1268,8 +1261,6 @@ extension JNI {
 
         return dylib
     }
-
-    #endif
 }
 
 final class NullTerminatedCString {
