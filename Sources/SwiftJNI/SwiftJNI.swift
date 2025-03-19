@@ -14,7 +14,8 @@ import Glibc
 #elseif canImport(Musl)
 import Musl
 #elseif os(Windows)
-import ucrt
+import CRT
+import WinSDK
 #endif
 
 // MARK: JNI Types
@@ -1143,10 +1144,12 @@ extension JNI {
         // so we need to dlsym it from some library, which has changed over various Android APIs
         // libnativehelper.so added in API 31 (https://github.com/android/ndk/issues/1320) to work around "libart.so" no longer being allowed to load
         for libname in [nil, "libnativehelper.so", "libart.so", "libdvm.so"] {
+            // Windows TODO: need to use LoadLibraryW (see https://github.com/swiftlang/sourcekit-lsp/blob/main/Sources/SourceKitD/dlopen.swift)
             let lib = dlopen(libname, RTLD_NOW)
             typealias JavaVMPtr = UnsafeMutablePointer<JavaVM?>
             typealias GetCreatedJavaVMs = @convention(c) (_ pvm: UnsafeMutablePointer<JavaVMPtr?>, _ count: Int32, _ num: UnsafeMutablePointer<Int32>) -> jint
 
+            // Windows TODO: need to use GetProcAddress
             guard let getCreatedJavaVMs = dlsym(lib, "JNI_GetCreatedJavaVMs").map({ unsafeBitCast($0, to: (GetCreatedJavaVMs).self) }) else {
                 continue
             }

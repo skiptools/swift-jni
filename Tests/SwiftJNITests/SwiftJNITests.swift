@@ -7,9 +7,6 @@ final class SwiftJNITests: XCTestCase {
         #if os(iOS)
         throw XCTSkip("skipping test due to no JVM on iOS")
         #endif
-        #if os(Android)
-        throw XCTSkip("skipping test due to Android test harness not running in a JVM")
-        #endif
 
         try JNI.attachJVM(launch: true)
 
