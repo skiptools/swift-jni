@@ -1160,7 +1160,7 @@ extension JNI {
             if getCreatedJavaVMs(&jvm, 1, &runningCount) == JNI_OK, let jvm = jvm {
                 jni = JNI(jvm: jvm)
                 return
-            } else {
+            } else if !launch {
                 fatalError("unable to invoke getCreatedJavaVMs for lib: \(libname ?? "")")
             }
         }
@@ -1213,12 +1213,26 @@ extension JNI {
             throw JVMError(description: "Could not launch embedded Java virtual machine: \(success)")
         }
 
+        #if os(Android)
+        // TODO: need to create JniInvocation::JniInvocation() or else crash with error: "Failed to create JniInvocation instance before using JNI invocation API"
+        #endif
+
         jni = JNI(jvm: pvm)
     }
 
     /// Finds the loads the local dynamic library that contains the JNI entry point functions
     /// `JNI_GetCreatedJavaVMs` and `JNI_CreateJavaVM`
     private static func loadLibJava() throws -> UnsafeMutableRawPointer {
+        #if os(Android)
+        for libname in ["libart.so", "libdvm.so", "libnativehelper.so"] {
+            // Windows TODO: need to use LoadLibraryW (see https://github.com/swiftlang/sourcekit-lsp/blob/main/Sources/SourceKitD/dlopen.swift)
+            // Android error: "Runtime library not loaded"
+            if let lib = dlopen(libname, RTLD_NOW) {
+                return lib
+            }
+        }
+        #endif
+
         // if JAVA_HOME is unset, default to the Homebrew installation
         if getenv("JAVA_HOME") == nil {
             if FileManager.default.fileExists(atPath: "/opt/homebrew/opt/java") {
