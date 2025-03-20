@@ -22,6 +22,7 @@ import WinSDK
 
 public typealias JNIEnv = CJNI.JNIEnv
 public typealias JNIEnvPointer = UnsafeMutablePointer<JNIEnv?>
+public typealias JavaVM = CJNI.JavaVM
 public typealias JavaBoolean = jboolean
 public typealias JavaByte = jbyte
 public typealias JavaChar = jchar
@@ -51,41 +52,25 @@ public typealias JavaFieldID = jfieldID
 public typealias JavaMethodID = jmethodID
 public typealias JavaParameter = jvalue
 
-#if compiler(>=6)
-extension JavaBoolean : @retroactive ExpressibleByBooleanLiteral {
-    public init(booleanLiteral value: Bool) {
-        self = value ? JavaBoolean(JNI_TRUE) : JavaBoolean(JNI_FALSE)
-    }
-}
-#else
-extension JavaBoolean : ExpressibleByBooleanLiteral {
-    public init(booleanLiteral value: Bool) {
-        self = value ? JavaBoolean(JNI_TRUE) : JavaBoolean(JNI_FALSE)
-    }
-}
-#endif
-
 // MARK: JNI
 
-/// The single shared singleton JNI instance for the process.
-public private(set) var jni: JNI! { // this gets set "OnLoad" so should always exist
-    didSet {
-        _ = JClassLoader.globalClassLoader // cache the global class loader on initialization
-    }
+@available(*, deprecated, renamed: "JNI.jni")
+public var jni: JNI! {
+    JNI.jni
 }
 
 /// Whether the shared JNI instance has been initialized.
 public var isJNIInitialized: Bool {
-    return jni != nil
+    JNI.jni != nil
 }
 
 /// Establish a context in which to perform JNI operations.
 ///
 /// - Warning: You cannot initiate JNI operations from native code outside of a context.
 public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
-    let jvm: JNIInvokeInterface = jni._jvm.pointee!.pointee
+    let jvm: JNIInvokeInterface = JNI.jni._jvm.pointee!.pointee
     var tenv: UnsafeMutableRawPointer?
-    let threadStatus = jvm.GetEnv(jni._jvm, &tenv, JavaInt(JNI_VERSION_1_6))
+    let threadStatus = jvm.GetEnv(JNI.jni._jvm, &tenv, JavaInt(JNI_VERSION_1_6))
 
     // Ensure that there is a `JNIEnvPointer` for the current thread
     // See: https://developer.android.com/training/articles/perf-jni#threads
@@ -95,11 +80,11 @@ public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
     case JNI_EDETACHED:
         // we weren't attached to the Java thread; attach, perform the block, and then detach
         var tenv: JNIEnvPointer!
-        if jvm.AttachCurrentThread(jni._jvm, &tenv, nil) != JNI_OK {
+        if jvm.AttachCurrentThread(JNI.jni._jvm, &tenv, nil) != JNI_OK {
             fatalError("SwiftJNI: unable to attach JNI to current thread")
         }
         defer {
-            if jvm.DetachCurrentThread(jni._jvm) != JNI_OK {
+            if jvm.DetachCurrentThread(JNI.jni._jvm) != JNI_OK {
                 fatalError("SwiftJNI: unable to detach JNI from thread")
             }
         }
@@ -116,6 +101,13 @@ public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
 
 /// Gateway to JVM and JNI functionality.
 public class JNI {
+    /// The single shared singleton JNI instance for the process.
+    public static var jni: JNI! { // this should be set in "OnLoad" and so should always exist
+        didSet {
+            _ = JClassLoader.globalClassLoader // cache the global class loader on initialization
+        }
+    }
+
     /// Our reference to the Java Virtual Machine, to be set on init
     let _jvm: UnsafeMutablePointer<JavaVM?>
 
@@ -296,9 +288,9 @@ public struct JNIError: Error, CustomStringConvertible {
     public init(description: String = "JNIError", clear: Bool) {
         self.description = description
 
-        jni.exceptionDescribe()
+        JNI.jni.exceptionDescribe()
         if clear {
-            jni.exceptionClear()
+            JNI.jni.exceptionClear()
         }
     }
 }
@@ -360,27 +352,27 @@ public protocol JObjectProtocol {
 
 extension JConvertible where Self: JObjectProtocol {
     public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Self {
-        fromJavaObject(try jni.withEnvThrowing(options: options) { $0.CallObjectMethodA($1, obj, method, args) }, options: options)
+        fromJavaObject(try JNI.jni.withEnvThrowing(options: options) { $0.CallObjectMethodA($1, obj, method, args) }, options: options)
     }
 
     public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Self {
-        fromJavaObject(try jni.withEnvThrowing(options: options) { $0.CallStaticObjectMethodA($1, cls, method, args) }, options: options)
+        fromJavaObject(try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticObjectMethodA($1, cls, method, args) }, options: options)
     }
 
     public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> Self {
-        fromJavaObject(jni.withEnv { $0.GetObjectField($1, obj, field) }, options: options)
+        fromJavaObject(JNI.jni.withEnv { $0.GetObjectField($1, obj, field) }, options: options)
     }
 
     public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> Void {
-        jni.withEnv { $0.SetObjectField($1, obj, field, toJavaObject(options: options)) }
+        JNI.jni.withEnv { $0.SetObjectField($1, obj, field, toJavaObject(options: options)) }
     }
 
     public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> Self {
-        fromJavaObject(jni.withEnv { $0.GetStaticObjectField($1, cls, field) }, options: options)
+        fromJavaObject(JNI.jni.withEnv { $0.GetStaticObjectField($1, cls, field) }, options: options)
     }
 
     public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> Void {
-        jni.withEnv { $0.SetStaticObjectField($1, cls, field, toJavaObject(options: options)) }
+        JNI.jni.withEnv { $0.SetStaticObjectField($1, cls, field, toJavaObject(options: options)) }
     }
 
     public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
@@ -423,7 +415,7 @@ extension JavaObjectPointer: JConvertible {
     }
 
     public func call(method: JavaMethodID, options: JConvertibleOptions, args : [JavaParameter]) throws -> Void {
-        try jni.withEnvThrowing(options: options) { $0.CallVoidMethodA($1, self, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallVoidMethodA($1, self, method, args) }
     }
 
     public func call<T>(method: JavaMethodID, options: JConvertibleOptions, args: [JavaParameter]) throws -> T where T: JConvertible {
@@ -484,7 +476,7 @@ open class JObject: JObjectProtocol {
     let ptr: JavaObjectPointer
 
     public init(_ ptr: JavaObjectPointer) {
-        self.ptr = jni.newGlobalRef(ptr)
+        self.ptr = JNI.jni.newGlobalRef(ptr)
     }
 
     public convenience init?(_ ptr: JavaObjectPointer?) {
@@ -496,12 +488,12 @@ open class JObject: JObjectProtocol {
     }
 
     deinit {
-        jniContext { jni.deleteGlobalRef(ptr) }
+        jniContext { JNI.jni.deleteGlobalRef(ptr) }
     }
 
     /// Return a reference to this object that will not become invalid if this `JObject` struct is deallocated.
     public func safePointer() -> JavaObjectPointer {
-        return jni.newLocalRef(ptr)
+        return JNI.jni.newLocalRef(ptr)
     }
 
     public func get<T: JConvertible>(field: JavaFieldID) -> T {
@@ -513,7 +505,7 @@ open class JObject: JObjectProtocol {
     }
 
     public func call(method: JavaMethodID, options: JConvertibleOptions, args : [JavaParameter]) throws -> Void {
-        try jni.withEnvThrowing(options: options) { $0.CallVoidMethodA($1, ptr, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallVoidMethodA($1, ptr, method, args) }
     }
 
     public func call<T>(method: JavaMethodID, options: JConvertibleOptions, args: [JavaParameter]) throws -> T where T: JConvertible {
@@ -536,7 +528,7 @@ public final class JClass : JObject {
     public convenience init(name: String, systemClass: Bool = false) throws {
         if systemClass {
             // findClass will use the Thread's ClassLoader, and when the thread is created natively, it will only be the bootstrap ClassLoader, which doesn't contain any classes embedded in the app itself
-            guard let cls = jni.findClass(name) else {
+            guard let cls = JNI.jni.findClass(name) else {
                 throw ClassNotFoundError(name: name)
             }
             self.init(cls, name: name)
@@ -548,27 +540,27 @@ public final class JClass : JObject {
     }
 
     public func getFieldID(name: String, sig: String) -> JavaFieldID? {
-        defer { jni.checkExceptionAndClear() }
-        return jni.withEnv { $0.GetFieldID($1, self.ptr, name, sig) }
+        defer { JNI.jni.checkExceptionAndClear() }
+        return JNI.jni.withEnv { $0.GetFieldID($1, self.ptr, name, sig) }
     }
 
     public func getStaticFieldID(name: String, sig: String) -> JavaFieldID? {
-        defer { jni.checkExceptionAndClear() }
-        return jni.withEnv { $0.GetStaticFieldID($1, self.ptr, name, sig) }
+        defer { JNI.jni.checkExceptionAndClear() }
+        return JNI.jni.withEnv { $0.GetStaticFieldID($1, self.ptr, name, sig) }
     }
 
     public func getMethodID(name: String, sig: String) -> JavaMethodID? {
-        defer { jni.checkExceptionAndClear() }
-        return jni.withEnv { $0.GetMethodID($1, self.ptr, name, sig) }
+        defer { JNI.jni.checkExceptionAndClear() }
+        return JNI.jni.withEnv { $0.GetMethodID($1, self.ptr, name, sig) }
     }
 
     public func getStaticMethodID(name: String, sig: String) -> JavaMethodID? {
-        defer { jni.checkExceptionAndClear() }
-        return jni.withEnv { $0.GetStaticMethodID($1, self.ptr, name, sig) }
+        defer { JNI.jni.checkExceptionAndClear() }
+        return JNI.jni.withEnv { $0.GetStaticMethodID($1, self.ptr, name, sig) }
     }
 
     public func create(ctor: JavaMethodID, options: JConvertibleOptions, args: [JavaParameter]) throws -> JavaObjectPointer {
-        guard let obj = try jni.withEnvThrowing(options: options, { $0.NewObjectA($1, self.ptr, ctor, args) }) else {
+        guard let obj = try JNI.jni.withEnvThrowing(options: options, { $0.NewObjectA($1, self.ptr, ctor, args) }) else {
             throw JNIError(clear: true) // init should never return nil
         }
         return obj
@@ -583,7 +575,7 @@ public final class JClass : JObject {
     }
 
     public func callStatic(method: JavaMethodID, options: JConvertibleOptions, args : [JavaParameter]) throws -> Void {
-        try jni.withEnvThrowing(options: options) { $0.CallStaticVoidMethodA($1, self.ptr, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticVoidMethodA($1, self.ptr, method, args) }
     }
 
     public func callStatic<T: JConvertible>(method: JavaMethodID, options: JConvertibleOptions, args: [JavaParameter]) throws -> T {
@@ -692,6 +684,20 @@ public final class JThrowable: JObject {
 
 // MARK: Primitives
 
+#if compiler(>=6)
+extension JavaBoolean : @retroactive ExpressibleByBooleanLiteral {
+}
+#else
+extension JavaBoolean : ExpressibleByBooleanLiteral {
+}
+#endif
+
+extension JavaBoolean {
+    public init(booleanLiteral value: Bool) {
+        self = value ? JavaBoolean(JNI_TRUE) : JavaBoolean(JNI_FALSE)
+    }
+}
+
 public final class JBoolean: JObject, JPrimitiveWrapperProtocol {
     public typealias JConvertibleType = Bool
     public static let javaClass = try! JClass(name: "java/lang/Boolean", systemClass: true)
@@ -703,27 +709,27 @@ extension Bool: JPrimitiveProtocol {
     public typealias JWrapperType = JBoolean
 
     public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Bool {
-        try jni.withEnvThrowing(options: options) { $0.CallBooleanMethodA($1, obj, method, args) == JNI_TRUE }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallBooleanMethodA($1, obj, method, args) == JNI_TRUE }
     }
 
     public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Bool {
-        try jni.withEnvThrowing(options: options) { $0.CallStaticBooleanMethodA($1, cls, method, args) == JNI_TRUE }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticBooleanMethodA($1, cls, method, args) == JNI_TRUE }
     }
 
     public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> Bool {
-        jni.withEnv { $0.GetBooleanField($1, obj, field) == JNI_TRUE }
+        JNI.jni.withEnv { $0.GetBooleanField($1, obj, field) == JNI_TRUE }
     }
 
     public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> Void {
-        jni.withEnv { $0.SetBooleanField($1, obj, field, (self) ? 1 : 0) }
+        JNI.jni.withEnv { $0.SetBooleanField($1, obj, field, (self) ? 1 : 0) }
     }
 
     public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> Bool {
-        jni.withEnv { $0.GetStaticBooleanField($1, cls, field) == JNI_TRUE }
+        JNI.jni.withEnv { $0.GetStaticBooleanField($1, cls, field) == JNI_TRUE }
     }
 
     public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> Void {
-        jni.withEnv { $0.SetBooleanField($1, cls, field, (self) ? 1 : 0) }
+        JNI.jni.withEnv { $0.SetBooleanField($1, cls, field, (self) ? 1 : 0) }
     }
 
     public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
@@ -742,27 +748,27 @@ extension Int8: JPrimitiveProtocol {
     public typealias JWrapperType = JByte
 
     public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Int8 {
-        try jni.withEnvThrowing(options: options) { $0.CallByteMethodA($1, obj, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallByteMethodA($1, obj, method, args) }
     }
 
     public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Int8 {
-        try jni.withEnvThrowing(options: options) { $0.CallStaticByteMethodA($1, cls, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticByteMethodA($1, cls, method, args) }
     }
 
     public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> Int8 {
-        jni.withEnv { $0.GetByteField($1, obj, field) }
+        JNI.jni.withEnv { $0.GetByteField($1, obj, field) }
     }
 
     public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetByteField($1, obj, field, self) }
+        JNI.jni.withEnv { $0.SetByteField($1, obj, field, self) }
     }
 
     public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> Int8 {
-        jni.withEnv { $0.GetStaticByteField($1, cls, field) }
+        JNI.jni.withEnv { $0.GetStaticByteField($1, cls, field) }
     }
 
     public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetStaticByteField($1, cls, field, self) }
+        JNI.jni.withEnv { $0.SetStaticByteField($1, cls, field, self) }
     }
 
     public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
@@ -781,27 +787,27 @@ extension UInt16: JPrimitiveProtocol {
     public typealias JWrapperType = JChar
 
     public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt16 {
-        try jni.withEnvThrowing(options: options) { $0.CallCharMethodA($1, obj, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallCharMethodA($1, obj, method, args) }
     }
 
     public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt16 {
-        try jni.withEnvThrowing(options: options) { $0.CallStaticCharMethodA($1, cls, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticCharMethodA($1, cls, method, args) }
     }
 
     public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> UInt16 {
-        jni.withEnv { $0.GetCharField($1, obj, field) }
+        JNI.jni.withEnv { $0.GetCharField($1, obj, field) }
     }
 
     public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetCharField($1, obj, field, self) }
+        JNI.jni.withEnv { $0.SetCharField($1, obj, field, self) }
     }
 
     public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> UInt16 {
-        jni.withEnv { $0.GetStaticCharField($1, cls, field) }
+        JNI.jni.withEnv { $0.GetStaticCharField($1, cls, field) }
     }
 
     public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetStaticCharField($1, cls, field, self) }
+        JNI.jni.withEnv { $0.SetStaticCharField($1, cls, field, self) }
     }
 
     public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
@@ -820,27 +826,27 @@ extension Int16: JPrimitiveProtocol {
     public typealias JWrapperType = JShort
 
     public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Int16 {
-        try jni.withEnvThrowing(options: options) { $0.CallShortMethodA($1, obj, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallShortMethodA($1, obj, method, args) }
     }
 
     public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Int16 {
-        try jni.withEnvThrowing(options: options) { $0.CallStaticShortMethodA($1, cls, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticShortMethodA($1, cls, method, args) }
     }
 
     public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> Int16 {
-        jni.withEnv { $0.GetShortField($1, obj, field) }
+        JNI.jni.withEnv { $0.GetShortField($1, obj, field) }
     }
 
     public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetShortField($1, obj, field, self) }
+        JNI.jni.withEnv { $0.SetShortField($1, obj, field, self) }
     }
 
     public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> Int16 {
-        jni.withEnv { $0.GetStaticShortField($1, cls, field) }
+        JNI.jni.withEnv { $0.GetStaticShortField($1, cls, field) }
     }
 
     public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetStaticShortField($1, cls, field, self) }
+        JNI.jni.withEnv { $0.SetStaticShortField($1, cls, field, self) }
     }
 
     public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
@@ -859,27 +865,27 @@ extension Int32: JPrimitiveProtocol {
     public typealias JWrapperType = JInteger
 
     public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Int32 {
-        try jni.withEnvThrowing(options: options) { $0.CallIntMethodA($1, obj, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallIntMethodA($1, obj, method, args) }
     }
 
     public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Int32 {
-        try jni.withEnvThrowing(options: options) { $0.CallStaticIntMethodA($1, cls, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticIntMethodA($1, cls, method, args) }
     }
 
     public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> Int32 {
-        jni.withEnv { $0.GetIntField($1, obj, field) }
+        JNI.jni.withEnv { $0.GetIntField($1, obj, field) }
     }
 
     public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetIntField($1, obj, field, self) }
+        JNI.jni.withEnv { $0.SetIntField($1, obj, field, self) }
     }
 
     public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> Int32 {
-        jni.withEnv { $0.GetStaticIntField($1, cls, field) }
+        JNI.jni.withEnv { $0.GetStaticIntField($1, cls, field) }
     }
 
     public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetStaticIntField($1, cls, field, self) }
+        JNI.jni.withEnv { $0.SetStaticIntField($1, cls, field, self) }
     }
 
     public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
@@ -898,27 +904,27 @@ extension Int64: JPrimitiveProtocol {
     public typealias JWrapperType = JLong
 
     public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Int64 {
-        try jni.withEnvThrowing(options: options) { $0.CallLongMethodA($1, obj, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallLongMethodA($1, obj, method, args) }
     }
 
     public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Int64 {
-        try jni.withEnvThrowing(options: options) { $0.CallStaticLongMethodA($1, cls, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticLongMethodA($1, cls, method, args) }
     }
 
     public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> Int64 {
-        jni.withEnv { $0.GetLongField($1, obj, field) }
+        JNI.jni.withEnv { $0.GetLongField($1, obj, field) }
     }
 
     public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetLongField($1, obj, field, self) }
+        JNI.jni.withEnv { $0.SetLongField($1, obj, field, self) }
     }
 
     public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> Int64 {
-        jni.withEnv { $0.GetStaticLongField($1, cls, field) }
+        JNI.jni.withEnv { $0.GetStaticLongField($1, cls, field) }
     }
 
     public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetStaticLongField($1, cls, field, self) }
+        JNI.jni.withEnv { $0.SetStaticLongField($1, cls, field, self) }
     }
 
     public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
@@ -977,27 +983,27 @@ extension Float: JPrimitiveProtocol {
     public typealias JWrapperType = JFloat
 
     public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Float {
-        try jni.withEnvThrowing(options: options) { $0.CallFloatMethodA($1, obj, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallFloatMethodA($1, obj, method, args) }
     }
 
     public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Float {
-        try jni.withEnvThrowing(options: options) { $0.CallStaticFloatMethodA($1, cls, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticFloatMethodA($1, cls, method, args) }
     }
 
     public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> Float {
-        jni.withEnv { $0.GetFloatField($1, obj, field) }
+        JNI.jni.withEnv { $0.GetFloatField($1, obj, field) }
     }
 
     public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetFloatField($1, obj, field, self) }
+        JNI.jni.withEnv { $0.SetFloatField($1, obj, field, self) }
     }
 
     public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> Float {
-        jni.withEnv { $0.GetStaticFloatField($1, cls, field) }
+        JNI.jni.withEnv { $0.GetStaticFloatField($1, cls, field) }
     }
 
     public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetStaticFloatField($1, cls, field, self) }
+        JNI.jni.withEnv { $0.SetStaticFloatField($1, cls, field, self) }
     }
 
     public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
@@ -1016,27 +1022,27 @@ extension Double: JPrimitiveProtocol {
     public typealias JWrapperType = JDouble
 
     public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Double {
-        try jni.withEnvThrowing(options: options) { $0.CallDoubleMethodA($1, obj, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallDoubleMethodA($1, obj, method, args) }
     }
 
     public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> Double {
-        try jni.withEnvThrowing(options: options) { $0.CallStaticDoubleMethodA($1, cls, method, args) }
+        try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticDoubleMethodA($1, cls, method, args) }
     }
 
     public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> Double {
-        jni.withEnv { $0.GetDoubleField($1, obj, field) }
+        JNI.jni.withEnv { $0.GetDoubleField($1, obj, field) }
     }
 
     public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetDoubleField($1, obj, field, self) }
+        JNI.jni.withEnv { $0.SetDoubleField($1, obj, field, self) }
     }
 
     public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> Double {
-        jni.withEnv { $0.GetStaticDoubleField($1, cls, field) }
+        JNI.jni.withEnv { $0.GetStaticDoubleField($1, cls, field) }
     }
 
     public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
-        jni.withEnv { $0.SetStaticDoubleField($1, cls, field, self) }
+        JNI.jni.withEnv { $0.SetStaticDoubleField($1, cls, field, self) }
     }
 
     public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
@@ -1048,7 +1054,7 @@ extension String: JObjectProtocol, JConvertible {
     private static let javaClass = try! JClass(name: "java/lang/String", systemClass: true)
 
     public static func fromJavaObject(_ obj: JavaObjectPointer?, options: JConvertibleOptions) -> String {
-        jni.withEnv { jni, env in
+        JNI.jni.withEnv { jni, env in
             guard let chars = jni.GetStringUTFChars(env, obj, nil) else {
                 fatalError("Could not get characters from String")
             }
@@ -1061,7 +1067,7 @@ extension String: JObjectProtocol, JConvertible {
     }
 
     public func toJavaObject(options: JConvertibleOptions) -> JavaString? {
-        jni.withEnv { jni, env in
+        JNI.jni.withEnv { jni, env in
             // NewStringUTF would be more efficient than converting the string to UTF-16, but NewStringUTF uses Java's "modified UTF-8", which doesn't encode characters outside of the BMP in the way Swift expects
             // we could theoretically scan the string to check whether the string can be represented
 
@@ -1082,23 +1088,6 @@ extension String: JObjectProtocol, JConvertible {
 }
 
 // MARK: JVM Management
-
-
-/// That this needs to be manually loaded with `System.loadLibrary("SwiftJNI")` in order to have `JNI_OnLoad` called.
-///
-/// A dynamic library that loads another dynamic library will *not* have `JNI_OnLoad` automatically called.
-///
-/// The alternative is to `dlsym("JNI_GetCreatedJavaVMs")` from the right shared object file (e.g., `libnativehelper.so` in recent Android APIs), but this is much easier.
-@_silgen_name("JNI_OnLoad")
-public func JNI_OnLoad(jvm: UnsafeMutablePointer<JavaVM?>, reserved: UnsafeMutableRawPointer) -> JavaInt {
-    jni = JNI(jvm: jvm)
-    if jni == nil {
-        fatalError("SwiftJNI: global jni variable was nil after JNI_OnLoad")
-    }
-
-    return JavaInt(JNI_VERSION_1_6)
-}
-
 
 public struct JVMOptions {
     public static let `default` = JVMOptions()
@@ -1161,7 +1150,7 @@ extension JNI {
                 jni = JNI(jvm: jvm)
                 return
             } else if !launch {
-                fatalError("unable to invoke getCreatedJavaVMs for lib: \(libname ?? "")")
+                throw JVMError(description: "unable to invoke getCreatedJavaVMs for lib: \(libname ?? "")")
             }
         }
 
