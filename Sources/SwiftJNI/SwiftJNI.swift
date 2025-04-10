@@ -478,7 +478,7 @@ extension JPrimitiveProtocol where JWrapperType.JConvertibleType == Self {
 
 // MARK: Object Wrappers
 
-open class JObject: JObjectProtocol {
+open class JObject: JObjectProtocol, @unchecked Sendable {
     let ptr: JavaObjectPointer
 
     public init(_ ptr: JavaObjectPointer) {
@@ -589,7 +589,7 @@ public final class JClass : JObject, @unchecked Sendable {
     }
 }
 
-public final class JClassLoader: JObject {
+public final class JClassLoader: JObject, @unchecked Sendable {
     private static let javaClass = try! JClass(name: "java/lang/ClassLoader", systemClass: true)
     private static let loadClassID = javaClass.getMethodID(name: "loadClass", sig: "(Ljava/lang/String;)Ljava/lang/Class;")!
 
@@ -605,7 +605,7 @@ public final class JClassLoader: JObject {
     }
 }
 
-public final class JThread: JObject {
+public final class JThread: JObject, @unchecked Sendable {
     private static let javaClass = try! JClass(name: "java/lang/Thread", systemClass: true)
     private static let threadCurrentThreadID = javaClass.getStaticMethodID(name: "currentThread", sig: "()Ljava/lang/Thread;")!
     private static let getContextClassLoaderID = javaClass.getMethodID(name: "getContextClassLoader", sig: "()Ljava/lang/ClassLoader;")!
@@ -625,7 +625,7 @@ public final class JThread: JObject {
     }
 }
 
-public final class JThrowable: JObject {
+public final class JThrowable: JObject, @unchecked Sendable {
     private static let javaClass = try! JClass(name: "java/lang/Throwable", systemClass: true)
     private static let javaErrorExceptionClass = try! JClass(name: "skip/lib/ErrorException")
     private static let javaErrorExceptionConstructor = javaErrorExceptionClass.getMethodID(name: "<init>", sig: "(Ljava/lang/String;)V")!
@@ -704,7 +704,7 @@ extension JavaBoolean {
     }
 }
 
-public final class JBoolean: JObject, JPrimitiveWrapperProtocol {
+public final class JBoolean: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
     public typealias JConvertibleType = Bool
     public static let javaClass = try! JClass(name: "java/lang/Boolean", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(Z)V")!
@@ -743,7 +743,7 @@ extension Bool: JPrimitiveProtocol {
     }
 }
 
-final public class JByte: JObject, JPrimitiveWrapperProtocol {
+final public class JByte: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
     public typealias JConvertibleType = Int8
     public static let javaClass = try! JClass(name: "java/lang/Byte", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(B)V")!
@@ -782,7 +782,7 @@ extension Int8: JPrimitiveProtocol {
     }
 }
 
-public final class JChar: JObject, JPrimitiveWrapperProtocol {
+public final class JChar: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
     public typealias JConvertibleType = UInt16
     public static let javaClass = try! JClass(name: "java/lang/Character", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(C)V")!
@@ -821,7 +821,7 @@ extension UInt16: JPrimitiveProtocol {
     }
 }
 
-public final class JShort: JObject, JPrimitiveWrapperProtocol {
+public final class JShort: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
     public typealias JConvertibleType = Int16
     public static let javaClass = try! JClass(name: "java/lang/Short", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(S)V")!
@@ -860,7 +860,7 @@ extension Int16: JPrimitiveProtocol {
     }
 }
 
-public final class JInteger: JObject, JPrimitiveWrapperProtocol {
+public final class JInteger: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
     public typealias JConvertibleType = Int32
     public static let javaClass = try! JClass(name: "java/lang/Integer", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(I)V")!
@@ -899,7 +899,7 @@ extension Int32: JPrimitiveProtocol {
     }
 }
 
-public final class JLong: JObject, JPrimitiveWrapperProtocol {
+public final class JLong: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
     public typealias JConvertibleType = Int64
     public static let javaClass = try! JClass(name: "java/lang/Long", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(J)V")!
@@ -978,7 +978,7 @@ extension Int: JPrimitiveProtocol {
     }
 }
 
-public final class JFloat: JObject, JPrimitiveWrapperProtocol {
+public final class JFloat: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
     public typealias JConvertibleType = Float
     public static let javaClass = try! JClass(name: "java/lang/Float", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(F)V")!
@@ -1017,7 +1017,7 @@ extension Float: JPrimitiveProtocol {
     }
 }
 
-public final class JDouble: JObject, JPrimitiveWrapperProtocol {
+public final class JDouble: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
     public typealias JConvertibleType = Double
     public static let javaClass = try! JClass(name: "java/lang/Double", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(D)V")!
