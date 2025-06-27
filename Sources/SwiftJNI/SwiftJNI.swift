@@ -441,7 +441,8 @@ extension JavaObjectPointer: JConvertible {
 public protocol JPrimitiveWrapperProtocol: JObjectProtocol {
     static var javaClass: JClass { get }
     static var initWithPrimitiveValueMethodID: JavaMethodID { get }
-    static var primitiveValueMethodID: JavaMethodID { get }
+    static var primitiveValueMethodID: JavaMethodID? { get }
+    static var primitiveValueFieldID: JavaFieldID? { get }
 
     associatedtype JConvertibleType: JConvertible
     init(_ value: JConvertibleType, options: JConvertibleOptions)
@@ -457,7 +458,13 @@ extension JPrimitiveWrapperProtocol where Self: JObject {
     }
 
     public func value(options: JConvertibleOptions) throws -> JConvertibleType {
-        return try call(method: Self.primitiveValueMethodID, options: options, args: [])
+        if let methodID = Self.primitiveValueMethodID {
+            return try call(method: methodID, options: options, args: [])
+        } else if let fieldID = Self.primitiveValueFieldID {
+            return get(field: fieldID)
+        } else {
+            fatalError()
+        }
     }
 }
 
@@ -468,7 +475,13 @@ public protocol JPrimitiveProtocol: JConvertible {
 
 extension JPrimitiveProtocol where JWrapperType.JConvertibleType == Self {
     public static func fromJavaObject(_ ptr: JavaObjectPointer?, options: JConvertibleOptions) -> Self {
-        return try! Self.call(JWrapperType.primitiveValueMethodID, on: ptr!, options: options, args: [])
+        if let methodID = JWrapperType.primitiveValueMethodID {
+            return try! Self.call(methodID, on: ptr!, options: options, args: [])
+        } else if let fieldID = JWrapperType.primitiveValueFieldID {
+            return Self.load(fieldID, of: ptr!, options: options)
+        } else {
+            fatalError()
+        }
     }
 
     public func toJavaObject(options: JConvertibleOptions) -> JavaObjectPointer? {
@@ -708,7 +721,8 @@ public final class JBoolean: JObject, JPrimitiveWrapperProtocol, @unchecked Send
     public typealias JConvertibleType = Bool
     public static let javaClass = try! JClass(name: "java/lang/Boolean", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(Z)V")!
-    public static let primitiveValueMethodID = javaClass.getMethodID(name: "booleanValue", sig: "()Z")!
+    public static let primitiveValueMethodID: JavaMethodID? = javaClass.getMethodID(name: "booleanValue", sig: "()Z")
+    public static let primitiveValueFieldID: JavaFieldID? = nil
 }
 
 extension Bool: JPrimitiveProtocol {
@@ -747,7 +761,8 @@ final public class JByte: JObject, JPrimitiveWrapperProtocol, @unchecked Sendabl
     public typealias JConvertibleType = Int8
     public static let javaClass = try! JClass(name: "java/lang/Byte", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(B)V")!
-    public static let primitiveValueMethodID = javaClass.getMethodID(name: "byteValue", sig: "()B")!
+    public static let primitiveValueMethodID: JavaMethodID? = javaClass.getMethodID(name: "byteValue", sig: "()B")
+    public static let primitiveValueFieldID: JavaFieldID? = nil
 }
 
 extension Int8: JPrimitiveProtocol {
@@ -782,50 +797,12 @@ extension Int8: JPrimitiveProtocol {
     }
 }
 
-public final class JChar: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
-    public typealias JConvertibleType = UInt16
-    public static let javaClass = try! JClass(name: "java/lang/Character", systemClass: true)
-    public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(C)V")!
-    public static let primitiveValueMethodID = javaClass.getMethodID(name: "charValue", sig: "()C")!
-}
-
-extension UInt16: JPrimitiveProtocol {
-    public typealias JWrapperType = JChar
-
-    public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt16 {
-        try JNI.jni.withEnvThrowing(options: options) { $0.CallCharMethodA($1, obj, method.methodID, args) }
-    }
-
-    public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt16 {
-        try JNI.jni.withEnvThrowing(options: options) { $0.CallStaticCharMethodA($1, cls, method.methodID, args) }
-    }
-
-    public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> UInt16 {
-        JNI.jni.withEnv { $0.GetCharField($1, obj, field.fieldID) }
-    }
-
-    public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
-        JNI.jni.withEnv { $0.SetCharField($1, obj, field.fieldID, self) }
-    }
-
-    public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> UInt16 {
-        JNI.jni.withEnv { $0.GetStaticCharField($1, cls, field.fieldID) }
-    }
-
-    public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
-        JNI.jni.withEnv { $0.SetStaticCharField($1, cls, field.fieldID, self) }
-    }
-
-    public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
-        return JavaParameter(c: self)
-    }
-}
-
 public final class JShort: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
     public typealias JConvertibleType = Int16
     public static let javaClass = try! JClass(name: "java/lang/Short", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(S)V")!
-    public static let primitiveValueMethodID = javaClass.getMethodID(name: "shortValue", sig: "()S")!
+    public static let primitiveValueMethodID: JavaMethodID? = javaClass.getMethodID(name: "shortValue", sig: "()S")
+    public static let primitiveValueFieldID: JavaFieldID? = nil
 }
 
 extension Int16: JPrimitiveProtocol {
@@ -864,7 +841,8 @@ public final class JInteger: JObject, JPrimitiveWrapperProtocol, @unchecked Send
     public typealias JConvertibleType = Int32
     public static let javaClass = try! JClass(name: "java/lang/Integer", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(I)V")!
-    public static let primitiveValueMethodID = javaClass.getMethodID(name: "intValue", sig: "()I")!
+    public static let primitiveValueMethodID: JavaMethodID? = javaClass.getMethodID(name: "intValue", sig: "()I")
+    public static let primitiveValueFieldID: JavaFieldID? = nil
 }
 
 extension Int32: JPrimitiveProtocol {
@@ -903,7 +881,8 @@ public final class JLong: JObject, JPrimitiveWrapperProtocol, @unchecked Sendabl
     public typealias JConvertibleType = Int64
     public static let javaClass = try! JClass(name: "java/lang/Long", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(J)V")!
-    public static let primitiveValueMethodID = javaClass.getMethodID(name: "longValue", sig: "()J")!
+    public static let primitiveValueMethodID: JavaMethodID? = javaClass.getMethodID(name: "longValue", sig: "()J")
+    public static let primitiveValueFieldID: JavaFieldID? = nil
 }
 
 extension Int64: JPrimitiveProtocol {
@@ -978,11 +957,212 @@ extension Int: JPrimitiveProtocol {
     }
 }
 
+final public class JUByte: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
+    public typealias JConvertibleType = UInt8
+    public static let javaClass = try! JClass(name: "kotlin/UByte", systemClass: true)
+    public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(B)V")!
+    public static let primitiveValueMethodID: JavaMethodID? = nil
+    public static let primitiveValueFieldID: JavaFieldID? = javaClass.getFieldID(name: "data", sig: "B")
+}
+
+extension UInt8: JPrimitiveProtocol {
+    public typealias JWrapperType = JUByte
+
+    public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt8 {
+        try UInt8(bitPattern: JNI.jni.withEnvThrowing(options: options) { $0.CallByteMethodA($1, obj, method.methodID, args) })
+    }
+
+    public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt8 {
+        try UInt8(bitPattern: JNI.jni.withEnvThrowing(options: options) { $0.CallStaticByteMethodA($1, cls, method.methodID, args) })
+    }
+
+    public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> UInt8 {
+        UInt8(bitPattern: JNI.jni.withEnv { $0.GetByteField($1, obj, field.fieldID) })
+    }
+
+    public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
+        JNI.jni.withEnv { $0.SetByteField($1, obj, field.fieldID, Int8(bitPattern: self)) }
+    }
+
+    public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> UInt8 {
+        UInt8(bitPattern: JNI.jni.withEnv { $0.GetStaticByteField($1, cls, field.fieldID) })
+    }
+
+    public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
+        JNI.jni.withEnv { $0.SetStaticByteField($1, cls, field.fieldID, Int8(bitPattern: self)) }
+    }
+
+    public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
+        return JavaParameter(b: Int8(bitPattern: self))
+    }
+}
+
+final public class JUShort: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
+    public typealias JConvertibleType = UInt16
+    public static let javaClass = try! JClass(name: "kotlin/UShort", systemClass: true)
+    public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(S)V")!
+    public static let primitiveValueMethodID: JavaMethodID? = nil
+    public static let primitiveValueFieldID: JavaFieldID? = javaClass.getFieldID(name: "data", sig: "S")
+}
+
+extension UInt16: JPrimitiveProtocol {
+    public typealias JWrapperType = JUShort
+
+    public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt16 {
+        try UInt16(bitPattern: JNI.jni.withEnvThrowing(options: options) { $0.CallShortMethodA($1, obj, method.methodID, args) })
+    }
+
+    public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt16 {
+        try UInt16(bitPattern: JNI.jni.withEnvThrowing(options: options) { $0.CallStaticShortMethodA($1, cls, method.methodID, args) })
+    }
+
+    public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> UInt16 {
+        UInt16(bitPattern: JNI.jni.withEnv { $0.GetShortField($1, obj, field.fieldID) })
+    }
+
+    public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
+        JNI.jni.withEnv { $0.SetShortField($1, obj, field.fieldID, Int16(bitPattern: self)) }
+    }
+
+    public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> UInt16 {
+        UInt16(bitPattern: JNI.jni.withEnv { $0.GetStaticShortField($1, cls, field.fieldID) })
+    }
+
+    public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
+        JNI.jni.withEnv { $0.SetStaticShortField($1, cls, field.fieldID, Int16(bitPattern: self)) }
+    }
+
+    public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
+        return JavaParameter(s: Int16(bitPattern: self))
+    }
+}
+
+public final class JUInt: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
+    public typealias JConvertibleType = UInt32
+    public static let javaClass = try! JClass(name: "kotlin/UInt", systemClass: true)
+    public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(I)V")!
+    public static let primitiveValueMethodID: JavaMethodID? = nil
+    public static let primitiveValueFieldID: JavaFieldID? = javaClass.getFieldID(name: "data", sig: "I")
+}
+
+extension UInt32: JPrimitiveProtocol {
+    public typealias JWrapperType = JUInt
+
+    public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt32 {
+        try UInt32(bitPattern: JNI.jni.withEnvThrowing(options: options) { $0.CallIntMethodA($1, obj, method.methodID, args) })
+    }
+
+    public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt32 {
+        try UInt32(bitPattern: JNI.jni.withEnvThrowing(options: options) { $0.CallStaticIntMethodA($1, cls, method.methodID, args) })
+    }
+
+    public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> UInt32 {
+        UInt32(bitPattern: JNI.jni.withEnv { $0.GetIntField($1, obj, field.fieldID) })
+    }
+
+    public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
+        JNI.jni.withEnv { $0.SetIntField($1, obj, field.fieldID, Int32(bitPattern: self)) }
+    }
+
+    public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> UInt32 {
+        UInt32(bitPattern: JNI.jni.withEnv { $0.GetStaticIntField($1, cls, field.fieldID) })
+    }
+
+    public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
+        JNI.jni.withEnv { $0.SetStaticIntField($1, cls, field.fieldID, Int32(bitPattern: self)) }
+    }
+
+    public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
+        return JavaParameter(i: Int32(bitPattern: self))
+    }
+}
+
+public final class JULong: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
+    public typealias JConvertibleType = UInt64
+    public static let javaClass = try! JClass(name: "kotlin/ULong", systemClass: true)
+    public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(J)V")!
+    public static let primitiveValueMethodID: JavaMethodID? = nil
+    public static let primitiveValueFieldID: JavaFieldID? = javaClass.getFieldID(name: "data", sig: "J")
+}
+
+extension UInt64: JPrimitiveProtocol {
+    public typealias JWrapperType = JULong
+
+    public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt64 {
+        try UInt64(bitPattern: JNI.jni.withEnvThrowing(options: options) { $0.CallLongMethodA($1, obj, method.methodID, args) })
+    }
+
+    public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt64 {
+        try UInt64(bitPattern: JNI.jni.withEnvThrowing(options: options) { $0.CallStaticLongMethodA($1, cls, method.methodID, args) })
+    }
+
+    public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> UInt64 {
+        UInt64(bitPattern: JNI.jni.withEnv { $0.GetLongField($1, obj, field.fieldID) })
+    }
+
+    public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
+        JNI.jni.withEnv { $0.SetLongField($1, obj, field.fieldID, Int64(bitPattern: self)) }
+    }
+
+    public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> UInt64 {
+        UInt64(bitPattern: JNI.jni.withEnv { $0.GetStaticLongField($1, cls, field.fieldID) })
+    }
+
+    public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
+        JNI.jni.withEnv { $0.SetStaticLongField($1, cls, field.fieldID, Int64(bitPattern: self)) }
+    }
+
+    public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
+        return JavaParameter(j: Int64(bitPattern: self))
+    }
+}
+
+extension UInt: JPrimitiveProtocol {
+    public typealias JWrapperType = JUInt
+
+    public static func call(_ method: JavaMethodID, on obj: JavaObjectPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt {
+        return UInt(try UInt32.call(method, on: obj, options: options, args: args))
+    }
+
+    public static func callStatic(_ method: JavaMethodID, on cls: JavaClassPointer, options: JConvertibleOptions, args: [JavaParameter]) throws -> UInt {
+        return UInt(try UInt32.callStatic(method, on: cls, options: options, args: args))
+    }
+
+    public static func load(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) -> UInt {
+        return UInt(UInt32.load(field, of: obj, options: options))
+    }
+
+    public func store(_ field: JavaFieldID, of obj: JavaObjectPointer, options: JConvertibleOptions) {
+        UInt32(self).store(field, of: obj, options: options)
+    }
+
+    public static func loadStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) -> UInt {
+        return UInt(UInt32.loadStatic(field, of: cls, options: options))
+    }
+
+    public func storeStatic(_ field: JavaFieldID, of cls: JavaClassPointer, options: JConvertibleOptions) {
+        UInt32(self).storeStatic(field, of: cls, options: options)
+    }
+
+    public func toJavaParameter(options: JConvertibleOptions) -> JavaParameter {
+        return UInt32(self).toJavaParameter(options: options)
+    }
+
+    public static func fromJavaObject(_ ptr: JavaObjectPointer?, options: JConvertibleOptions) -> Self {
+        return UInt(UInt32.fromJavaObject(ptr, options: options))
+    }
+
+    public func toJavaObject(options: JConvertibleOptions) -> JavaObjectPointer? {
+        return UInt32(self).toJavaObject(options: options)
+    }
+}
+
 public final class JFloat: JObject, JPrimitiveWrapperProtocol, @unchecked Sendable {
     public typealias JConvertibleType = Float
     public static let javaClass = try! JClass(name: "java/lang/Float", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(F)V")!
-    public static let primitiveValueMethodID = javaClass.getMethodID(name: "floatValue", sig: "()F")!
+    public static let primitiveValueMethodID: JavaMethodID? = javaClass.getMethodID(name: "floatValue", sig: "()F")
+    public static let primitiveValueFieldID: JavaFieldID? = nil
 }
 
 extension Float: JPrimitiveProtocol {
@@ -1021,7 +1201,8 @@ public final class JDouble: JObject, JPrimitiveWrapperProtocol, @unchecked Senda
     public typealias JConvertibleType = Double
     public static let javaClass = try! JClass(name: "java/lang/Double", systemClass: true)
     public static let initWithPrimitiveValueMethodID = javaClass.getMethodID(name: "<init>", sig: "(D)V")!
-    public static let primitiveValueMethodID = javaClass.getMethodID(name: "doubleValue", sig: "()D")!
+    public static let primitiveValueMethodID: JavaMethodID? = javaClass.getMethodID(name: "doubleValue", sig: "()D")
+    public static let primitiveValueFieldID: JavaFieldID? = nil
 }
 
 extension Double: JPrimitiveProtocol {
