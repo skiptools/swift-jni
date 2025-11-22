@@ -1319,6 +1319,7 @@ extension JNI {
         // we need to get the host JVM using JNI_GetCreatedJavaVMs, but it is not exported in jni.h,
         // so we need to dlsym it from some library, which has changed over various Android APIs
         // libnativehelper.so added in API 31 (https://github.com/android/ndk/issues/1320) to work around "libart.so" no longer being allowed to load
+        // FIXME: this does *not* work on API 29 and 30 specifically, since it is after Android started restricting access to the APIs but before they exposed JNI_GetCreatedJavaVMs publicly
         for libname in [nil, "libnativehelper.so", "libart.so", "libdvm.so"] {
             // Windows TODO: need to use LoadLibraryW (see https://github.com/swiftlang/sourcekit-lsp/blob/main/Sources/SourceKitD/dlopen.swift)
             let lib = dlopen(libname, RTLD_NOW)
