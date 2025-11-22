@@ -1425,10 +1425,10 @@ extension JNI {
         let ext: String
         #if os(Windows)
         ext = "dll"
-        #elseif os(Linux) || os(Android)
-        ext = "so"
-        #elseif os(macOS) || os(iOS) || os(tvOS)
+        #elseif canImport(Darwin) // macOS, iOS, etc.
         ext = "dylib"
+        #else
+        ext = "so"
         #endif
 
         let libs = [
