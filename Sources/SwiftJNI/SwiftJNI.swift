@@ -65,6 +65,8 @@ public var isJNIInitialized: Bool {
 ///
 /// - Warning: You cannot initiate JNI operations from native code outside of a context.
 public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
+    try! JNI.attachJVM() // ensure that we have a JNI context
+
     let jvm: JNIInvokeInterface = JNI.jni._jvm.pointee!.pointee
     var tenv: UnsafeMutableRawPointer?
     let threadStatus = jvm.GetEnv(JNI.jni._jvm, &tenv, JavaInt(JNI_VERSION_1_6))
