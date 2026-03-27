@@ -12,26 +12,28 @@ jobs:
   linux-android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: "Test Swift Package Linux"
-        run: swift test
+        run: SWIFT_JAVA_JNI_CORE=0 swift test
+      - name: "Test Swift Package Linux (SWIFT_JAVA_JNI_CORE)"
+        run: SWIFT_JAVA_JNI_CORE=1 swift test
       - name: "Test Swift Package Android"
-        if: false # issues with JNI_CreateJavaVM on Android
         uses: skiptools/swift-android-action@v2
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+      - name: "Test Swift Package macOS (SWIFT_JAVA_JNI_CORE)"
+        run: SWIFT_JAVA_JNI_CORE=0 swift test
       - name: "Test Swift Package macOS"
-        run: swift test
+        run: SWIFT_JAVA_JNI_CORE=1 swift test
   windows:
     runs-on: windows-latest
-    if: false # not yet working, needs dlopen, dlsym, etc.
     steps:
       - uses: compnerd/gha-setup-swift@main
         with:
-          branch: swift-6.1
-          tag: 6.1-RELEASE
-      - uses: actions/checkout@v4
-      - run: swift test
+          branch: swift-6.3
+          tag: 6.3-RELEASE
+      - uses: actions/checkout@v6
+      - run: SWIFT_JAVA_JNI_CORE=1 swift test
 

@@ -1,5 +1,9 @@
 // Copyright 2024–2025 Skip
+#if SWIFT_JAVA_JNI_CORE
+import SwiftJavaJNICore
+#else
 import CJNI
+#endif
 #if canImport(FoundationEssentials)
 import FoundationEssentials
 #else
@@ -20,9 +24,14 @@ import WinSDK
 
 // MARK: JNI Types
 
-public typealias JNIEnv = CJNI.JNIEnv
-public typealias JNIEnvPointer = UnsafeMutablePointer<JNIEnv?>
+#if SWIFT_JAVA_JNI_CORE
+public typealias JavaVM = SwiftJavaJNICore.JavaVM
+public typealias JNIEnv = SwiftJavaJNICore.JNIEnv
+#else
 public typealias JavaVM = CJNI.JavaVM
+public typealias JNIEnv = CJNI.JNIEnv
+#endif
+public typealias JNIEnvPointer = UnsafeMutablePointer<JNIEnv?>
 public typealias JavaBoolean = jboolean
 public typealias JavaByte = jbyte
 public typealias JavaChar = jchar
@@ -50,11 +59,6 @@ public typealias JavaWeakReference = jweak
 public typealias JavaParameter = jvalue
 
 // MARK: JNI
-
-@available(*, deprecated, renamed: "JNI.jni")
-public var jni: JNI! {
-    JNI.jni
-}
 
 /// Whether the shared JNI instance has been initialized.
 public var isJNIInitialized: Bool {
@@ -96,6 +100,38 @@ public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
     }
 }
 
+#if SWIFT_JAVA_JNI_CORE
+public typealias JNI = SwiftJavaJNICore.JavaVirtualMachine
+
+extension JNI {
+    public static var jni: JNI! { // this should be set in "OnLoad" and so should always exist
+        get {
+            try! JavaVirtualMachine.shared()
+        }
+
+        set {
+            JavaVirtualMachine.setShared(newValue)
+        }
+    }
+
+    // Normally we init the jni global ourselves in JNI_OnLoad
+    public convenience init(jvm: UnsafeMutablePointer<JavaVM?>) {
+        self.init(adoptingJVM: jvm)
+    }
+
+    /// Our reference to the Java Virtual Machine, to be set on init
+    var _jvm: UnsafeMutablePointer<JavaVM?> {
+        get {
+            var jvm: UnsafeMutablePointer<JavaVM?>? = nil
+            let env = try! environment()
+            guard env.pointee!.pointee.GetJavaVM(env, &jvm) == JNI_OK, let jvm else {
+                fatalError("unable to call getJavaVM")
+            }
+            return jvm
+        }
+    }
+}
+#else
 /// Gateway to JVM and JNI functionality.
 public class JNI {
     /// The single shared singleton JNI instance for the process.
@@ -113,6 +149,7 @@ public class JNI {
         self._jvm = jvm
     }
 }
+#endif
 
 extension JNI {
     /// Perform an operation with the current thread's `JNIEnviPointer`.
@@ -323,10 +360,10 @@ public struct ThrowableError: Error, CustomStringConvertible, JObjectProtocol, J
 /// Java conversion options.
 public struct JConvertibleOptions: OptionSet {
     /// Optimize for bridging to pure Kotlin code rather than transpiled Swift.
-    public static let kotlincompat = JConvertibleOptions(rawValue: 1 << 0)
+    nonisolated(unsafe) public static let kotlincompat = JConvertibleOptions(rawValue: 1 << 0)
     /// Map to a Kotlin container type. Useful for passing an array or dictionary to a known List or Map, even when content might
     /// not be expected to be `.kotlincompat`.
-    public static let kotlincompatContainer = JConvertibleOptions(rawValue: 1 << 1)
+    nonisolated(unsafe) public static let kotlincompatContainer = JConvertibleOptions(rawValue: 1 << 1)
 
     public let rawValue: Int
 
@@ -468,10 +505,23 @@ extension JPrimitiveWrapperProtocol where Self: JObject {
     }
 }
 
+#if SWIFT_JAVA_JNI_CORE
+/// A Java primitive
+public protocol JPrimitiveProtocol: JConvertible, JavaValue {
+    associatedtype JWrapperType: JPrimitiveWrapperProtocol
+}
+
+/// JavaValue conformance
+public extension JPrimitiveProtocol {
+
+}
+
+#else
 /// A Java primitive
 public protocol JPrimitiveProtocol: JConvertible {
     associatedtype JWrapperType: JPrimitiveWrapperProtocol
 }
+#endif
 
 extension JPrimitiveProtocol where JWrapperType.JConvertibleType == Self {
     public static func fromJavaObject(_ ptr: JavaObjectPointer?, options: JConvertibleOptions) -> Self {
@@ -506,6 +556,12 @@ open class JObject: JObjectProtocol, @unchecked Sendable {
         }
     }
 
+    #if SWIFT_JAVA_JNI_CORE
+    public required init(fromJNI value: JavaObjectPointer?, in environment: JNIEnvironment) {
+        self.ptr = JNI.jni.newGlobalRef(value!)
+    }
+    #endif
+
     deinit {
         jniContext { JNI.jni.deleteGlobalRef(ptr) }
     }
@@ -532,6 +588,79 @@ open class JObject: JObjectProtocol, @unchecked Sendable {
     }
 }
 
+#if SWIFT_JAVA_JNI_CORE
+/// Type represented by a Java object.
+extension JObject: JavaValue {
+    public typealias JNIType = JavaObjectPointer?
+
+    public static var jvalueKeyPath: WritableKeyPath<jvalue, JNIType> { \.l }
+
+    public func getJNIValue(in environment: SwiftJavaJNICore.JNIEnvironment) -> JNIType {
+        self.ptr
+    }
+
+    public static var javaType: SwiftJavaJNICore.JavaType {
+        .class(package: "java.lang", name: "Object")
+    }
+
+    public static func jniMethodCall(in environment: SwiftJavaJNICore.JNIEnvironment) -> SwiftJavaJNICore.JNIMethodCall<JNIType> {
+        environment.interface.CallObjectMethodA
+    }
+
+    public static func jniFieldGet(in environment: SwiftJavaJNICore.JNIEnvironment) -> SwiftJavaJNICore.JNIFieldGet<JNIType> {
+        environment.interface.GetObjectField
+    }
+
+    public static func jniFieldSet(in environment: SwiftJavaJNICore.JNIEnvironment) -> SwiftJavaJNICore.JNIFieldSet<JNIType> {
+        environment.interface.SetObjectField
+    }
+
+    public static func jniStaticMethodCall(in environment: SwiftJavaJNICore.JNIEnvironment) -> SwiftJavaJNICore.JNIStaticMethodCall<JNIType> {
+        environment.interface.CallStaticObjectMethodA
+    }
+
+    public static func jniStaticFieldGet(in environment: SwiftJavaJNICore.JNIEnvironment) -> SwiftJavaJNICore.JNIStaticFieldGet<JNIType> {
+        environment.interface.GetStaticObjectField
+    }
+
+    public static func jniStaticFieldSet(in environment: SwiftJavaJNICore.JNIEnvironment) -> SwiftJavaJNICore.JNIStaticFieldSet<JNIType> {
+        environment.interface.SetStaticObjectField
+    }
+
+    public static func jniNewArray(in environment: JNIEnvironment) -> JNINewArray {
+        return { environment, size in
+            let objectClass = environment.interface.FindClass(environment, "java/lang/Object")
+            return environment.interface.NewObjectArray(environment, size, objectClass, nil)
+        }
+    }
+
+    public static func jniGetArrayRegion(in environment: JNIEnvironment) -> JNIGetArrayRegion<JNIType> {
+        { environment, array, start, length, outPointer in
+            let buffer = UnsafeMutableBufferPointer(start: outPointer, count: Int(length))
+            for i in start..<start + length {
+                buffer.initializeElement(
+                    at: Int(i),
+                    to: environment.interface.GetObjectArrayElement(environment, array, Int32(i))
+                )
+            }
+        }
+    }
+
+    public static func jniSetArrayRegion(in environment: JNIEnvironment) -> JNISetArrayRegion<JNIType> {
+        { environment, array, start, length, outPointer in
+            let buffer = UnsafeBufferPointer(start: outPointer, count: Int(length))
+            for i in start..<start + length {
+                environment.interface.SetObjectArrayElement(environment, array, i, buffer[Int(i)])
+            }
+        }
+    }
+
+    public static var jniPlaceholderValue: JNIType {
+        nil
+    }
+}
+#endif
+
 public final class JClass : JObject, @unchecked Sendable {
     public let name: String
 
@@ -557,6 +686,15 @@ public final class JClass : JObject, @unchecked Sendable {
             self.init(cls, name: name)
         }
     }
+    
+
+    #if SWIFT_JAVA_JNI_CORE
+    public required init(fromJNI value: JavaObjectPointer?, in environment: JNIEnvironment) {
+        // TODO: revisit required initializer
+        self.name = ""
+        super.init(value!)
+    }
+    #endif
 
     public func getFieldID(name: String, sig: String) -> JavaFieldID? {
         defer { JNI.jni.checkExceptionAndClear() }
@@ -643,7 +781,7 @@ public final class JThrowable: JObject, @unchecked Sendable {
     private static let javaErrorExceptionClass = try! JClass(name: "skip/lib/ErrorException")
     private static let javaErrorExceptionConstructor = javaErrorExceptionClass.getMethodID(name: "<init>", sig: "(Ljava/lang/String;)V")!
     /// Handles converting the error pointer into the error that will ultimately be thrown
-    public static var errorConverter: ((JavaObjectPointer, JConvertibleOptions) -> Error?) = { ptr, options in descriptionToError(ptr, options: options) }
+    nonisolated(unsafe) public static var errorConverter: ((JavaObjectPointer, JConvertibleOptions) -> Error?) = { ptr, options in descriptionToError(ptr, options: options) }
 
     public static func toError(_ ptr: JavaObjectPointer?, options: JConvertibleOptions) -> Error? {
         guard let ptr else {
@@ -1277,7 +1415,7 @@ extension String: JObjectProtocol, JConvertible {
 // MARK: JVM Management
 
 public struct JVMOptions {
-    public static let `default` = JVMOptions()
+    nonisolated(unsafe) public static let `default` = JVMOptions()
 
     public var verboseGarbageCollection = false
     public var verboseClassLoading = false
@@ -1307,6 +1445,14 @@ public struct JVMOptions {
     }
 }
 
+#if SWIFT_JAVA_JNI_CORE
+extension JNI {
+    /// compat that just passes through to `JNI.shared()`
+    public static func attachJVM(launch: Bool = false) throws {
+        _ = try JNI.shared()
+    }
+}
+#else
 extension JNI {
     /// Find the running JVM and sets it as the JNI VM.
     /// If the JNI context is nil (e.g., we are running on macOS rather than Android), starts up an embedded JVM process and sets the JNI context from that.
@@ -1433,10 +1579,11 @@ extension JNI {
         #endif
 
         let libs = [
+            URL(fileURLWithPath: "java/lib/server/libjvm.\(ext)", relativeTo: javaHome),
             URL(fileURLWithPath: "jre/lib/server/libjvm.\(ext)", relativeTo: javaHome),
             URL(fileURLWithPath: "lib/server/libjvm.\(ext)", relativeTo: javaHome),
             URL(fileURLWithPath: "lib/libjvm.\(ext)", relativeTo: javaHome),
-            URL(fileURLWithPath: "libexec/openjdk.jdk/Contents/Home/lib/server/libjvm.\(ext)", relativeTo: javaHome), // Homebrew
+            URL(fileURLWithPath: "java/libexec/openjdk.jdk/Contents/Home/lib/server/libjvm.\(ext)", relativeTo: javaHome), // Homebrew
         ]
 
         guard let lib = libs.first(where: { FileManager.default.isReadableFile(atPath: $0.path) }) else {
@@ -1455,6 +1602,7 @@ extension JNI {
         return dylib
     }
 }
+#endif
 
 final class NullTerminatedCString {
     let length: Int
