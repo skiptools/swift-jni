@@ -69,6 +69,9 @@ public var isJNIInitialized: Bool {
 ///
 /// - Warning: You cannot initiate JNI operations from native code outside of a context.
 public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
+    precondition(JNI.jni != nil, "JNI.jni was unset")
+    precondition(JNI.jni._jvm.pointee != nil, "JNI.jni._jvm.pointee was nil")
+
     let jvm: JNIInvokeInterface = JNI.jni._jvm.pointee!.pointee
     var tenv: UnsafeMutableRawPointer?
     let threadStatus = jvm.GetEnv(JNI.jni._jvm, &tenv, JavaInt(JNI_VERSION_1_6))
@@ -137,7 +140,9 @@ public class JNI {
     /// The single shared singleton JNI instance for the process.
     public static var jni: JNI! { // this should be set in "OnLoad" and so should always exist
         didSet {
-            _ = JClassLoader.globalClassLoader // cache the global class loader on initialization
+            jniContext {
+                JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader() // cache the global class loader on initialization
+            }
         }
     }
 
@@ -674,15 +679,15 @@ public final class JClass : JObject, @unchecked Sendable {
     ///   - name: the name of the Java class, like `java/lang/String`
     ///   - systemClass: whether this is a system class provided by the bootclassloader, or a class that may only be available through the `JClassLoader.globalClassLoader` (which is set when JNI initializes, and typically will contain all the classes packaged with an application).
     public convenience init(name: String, systemClass: Bool = false) throws {
-        if systemClass {
+        if !systemClass, let classLoader = JClassLoader.globalClassLoader {
+            // use the same ClassLoader as when JNI was initialized, which will include the classes bundled with the app
+            let cls = try classLoader.loadClass(name.split(separator: "/").joined(separator: "."))
+            self.init(cls, name: name)
+        } else {
             // findClass will use the Thread's ClassLoader, and when the thread is created natively, it will only be the bootstrap ClassLoader, which doesn't contain any classes embedded in the app itself
             guard let cls = JNI.jni.findClass(name) else {
                 throw ClassNotFoundError(name: name)
             }
-            self.init(cls, name: name)
-        } else {
-            // use the same ClassLoader as when JNI was initialized, which will include the classes bundled with the app
-            let cls = try JClassLoader.globalClassLoader.loadClass(name.split(separator: "/").joined(separator: "."))
             self.init(cls, name: name)
         }
     }
@@ -744,11 +749,13 @@ public final class JClassLoader: JObject, @unchecked Sendable {
     private static let javaClass = try! JClass(name: "java/lang/ClassLoader", systemClass: true)
     private static let loadClassID = javaClass.getMethodID(name: "loadClass", sig: "(Ljava/lang/String;)Ljava/lang/Class;")!
 
-    public static let globalClassLoader: JClassLoader = try! JThread.currentThread.getContextClassLoader()!
+    public fileprivate(set) static var globalClassLoader: JClassLoader?
 
     /// Sets the current thread's ClassLoader to be the single global classLoader
     public static func setThreadClassLoader() {
-        try! JThread.currentThread.setContextClassLoader(globalClassLoader)
+        if let globalClassLoader {
+            try? JThread.currentThread.setContextClassLoader(globalClassLoader)
+        }
     }
 
     fileprivate func loadClass(_ name: String) throws -> jclass {
