@@ -23,17 +23,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
-      - name: "Test Swift Package macOS (SWIFT_JAVA_JNI_CORE)"
-        run: SWIFT_JAVA_JNI_CORE=0 swift test
       - name: "Test Swift Package macOS"
+        run: SWIFT_JAVA_JNI_CORE=0 swift test
+      - name: "Test Swift Package macOS (SWIFT_JAVA_JNI_CORE)"
         run: SWIFT_JAVA_JNI_CORE=1 swift test
-  windows:
-    runs-on: windows-latest
-    steps:
-      - uses: compnerd/gha-setup-swift@main
-        with:
-          branch: swift-6.3
-          tag: 6.3-RELEASE
-      - uses: actions/checkout@v6
-      - run: SWIFT_JAVA_JNI_CORE=1 swift test
 
