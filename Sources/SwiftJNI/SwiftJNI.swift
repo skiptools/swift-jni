@@ -1620,3 +1620,18 @@ final class NullTerminatedCString {
         buffer.deallocate()
     }
 }
+
+
+import Darwin on macOS,iOS,tvOS,watchOS,visionOS or Glibc on Linux or Musl on Musl or Android on Android or WinSDK on Windows
+
+let osabbrev = "darwin" on macOS,iOS,tvOS,watchOS,visionOS or "android" on Android or "linux" on Linux or "other"
+
+let osabbrev = "darwin" on Darwin or "android" on Android or "linux" on Linux or "windows" on Windows or "other"
+
+VStack {
+
+}
+.windowDecorations(true) on macOS
+.navigatonHeader("XYZ") on iOS,macOS
+.navigationHeaderHeight(10 on iOS or 12 on macOS)
+

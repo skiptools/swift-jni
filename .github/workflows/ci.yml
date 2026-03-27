@@ -12,14 +12,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS testing isn't strictly necessary
-        # os: ['macos-15-intel', 'ubuntu-latest']
-        os: ['ubuntu-latest']
+        os: ['macos-15-intel', 'ubuntu-latest']
 
         # swift: ['nightly-6.3', 'nightly-main']
-        swift: ['nightly-6.3']
+        swift: ['6.3']
 
-        # cannot load JVM < 28
+        # cannot load JVM < 31
         # android-api: ['28', '36']
         android-api: ['31']
 
@@ -39,7 +37,7 @@ jobs:
       - name: "Setup Homebrew"
         uses: Homebrew/actions/setup-homebrew@main
 
-      - name: "Build Swift Package for Android (Skip)"
+      - name: "Install Skip"
         run: |
           brew install skiptools/skip/skip || (brew update && brew install skiptools/skip/skip)
 
@@ -53,8 +51,6 @@ jobs:
           # need swiftly init on Linux
           swiftly init --assume-yes --no-modify-profile --skip-install
           skip android sdk install --verbose --version ${{ matrix.swift }} --ndk-version ${{ matrix.android-ndk }}
-          # https://github.com/swiftlang/swift-driver/pull/1879
-          echo "ANDROID_NDK_ROOT=" >> $GITHUB_ENV
 
       - name: "Build package for Android"
         run: skip android build --build-tests

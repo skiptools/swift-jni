@@ -4,7 +4,7 @@ import PackageDescription
 let jniDependency: Target.Dependency
 let swiftSettings: [SwiftSetting]
 
-let useSwiftJavaJNICore = Context.environment["SWIFT_JAVA_JNI_CORE"] ?? "0" == "1"
+let useSwiftJavaJNICore = Context.environment["SWIFT_JAVA_JNI_CORE"] ?? "1" == "1"
 
 if useSwiftJavaJNICore {
     // use swift-java-jni-core
