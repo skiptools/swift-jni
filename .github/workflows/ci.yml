@@ -4,27 +4,67 @@ on:
     branches: [ main ]
   workflow_dispatch:
   pull_request:
-    branches:
-      - '*'
   schedule:
     - cron: '45 3,15 * * *'
 jobs:
-  linux-android:
-    runs-on: ubuntu-latest
+  ci:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS testing isn't strictly necessary
+        # os: ['macos-15-intel', 'ubuntu-latest']
+        os: ['ubuntu-latest']
+
+        # swift: ['nightly-6.3', 'nightly-main']
+        swift: ['nightly-6.3']
+
+        # cannot load JVM < 28
+        # android-api: ['28', '36']
+        android-api: ['31']
+
+        android-ndk: ['r27d', 'r30-beta1']
+        # android-ndk: ['r27d']
+
+    runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v6
-      - name: "Test Swift Package Linux"
+      - name: "Test Swift Package"
         run: SWIFT_JAVA_JNI_CORE=0 swift test
-      - name: "Test Swift Package Linux (SWIFT_JAVA_JNI_CORE)"
+
+      - name: "Test Swift Package (SWIFT_JAVA_JNI_CORE)"
         run: SWIFT_JAVA_JNI_CORE=1 swift test
-      - name: "Test Swift Package Android"
-        uses: skiptools/swift-android-action@v2
-  macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: "Test Swift Package macOS"
-        run: SWIFT_JAVA_JNI_CORE=0 swift test
-      - name: "Test Swift Package macOS (SWIFT_JAVA_JNI_CORE)"
-        run: SWIFT_JAVA_JNI_CORE=1 swift test
+
+      - name: "Setup Homebrew"
+        uses: Homebrew/actions/setup-homebrew@main
+
+      - name: "Build Swift Package for Android (Skip)"
+        run: |
+          brew install skiptools/skip/skip || (brew update && brew install skiptools/skip/skip)
+
+      - name: "Install Host Toolchain prerequisites"
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get -y install libcurl4-openssl-dev || (sudo apt-get update && sudo apt-get -y install libcurl4-openssl-dev)
+
+      - name: "Install Swift SDK for Android"
+        run: |
+          # need swiftly init on Linux
+          swiftly init --assume-yes --no-modify-profile --skip-install
+          skip android sdk install --verbose --version ${{ matrix.swift }} --ndk-version ${{ matrix.android-ndk }}
+          # https://github.com/swiftlang/swift-driver/pull/1879
+          echo "ANDROID_NDK_ROOT=" >> $GITHUB_ENV
+
+      - name: "Build package for Android"
+        run: skip android build --build-tests
+
+      - name: "Test Swift Package on Android"
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.android-api }}
+          arch: x86_64
+          script: |
+            SWIFT_JAVA_JNI_CORE=0 skip android test --apk --verbose
+            SWIFT_JAVA_JNI_CORE=1 skip android test --apk --verbose
 
