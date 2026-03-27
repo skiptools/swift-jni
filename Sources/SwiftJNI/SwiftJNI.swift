@@ -686,6 +686,7 @@ public final class JClass : JObject, @unchecked Sendable {
         } else {
             // findClass will use the Thread's ClassLoader, and when the thread is created natively, it will only be the bootstrap ClassLoader, which doesn't contain any classes embedded in the app itself
             guard let cls = JNI.jni.findClass(name) else {
+                JNI.jni.exceptionClear()
                 throw ClassNotFoundError(name: name)
             }
             self.init(cls, name: name)
