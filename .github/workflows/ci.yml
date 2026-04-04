@@ -39,7 +39,7 @@ jobs:
 
       - name: "Install Skip"
         run: |
-          brew tap skiptools/skip/
+          brew tap skiptools/skip
           brew install skiptools/skip/skip || (brew update && brew install skiptools/skip/skip)
 
       - name: "Install Host Toolchain prerequisites"
