@@ -15,7 +15,7 @@ jobs:
         os: ['macos-15-intel', 'ubuntu-latest']
 
         # swift: ['nightly-6.3', 'nightly-main']
-        swift: ['6.3']
+        swift: ['6.3.1']
 
         # cannot load JVM < 31
         # android-api: ['28', '36']
