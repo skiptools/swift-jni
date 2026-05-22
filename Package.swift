@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.1
 import PackageDescription
 
 let jniDependency: Target.Dependency
@@ -36,6 +36,6 @@ let package = Package(
 
 if useSwiftJavaJNICore {
     package.dependencies += [
-        .package(url: "https://github.com/swiftlang/swift-java-jni-core.git", from: "0.4.0"),
+        .package(url: "https://github.com/swiftlang/swift-java-jni-core.git", from: "0.5.1"),
     ]
 }
