@@ -138,7 +138,7 @@ extension JNI {
 /// Gateway to JVM and JNI functionality.
 public class JNI {
     /// The single shared singleton JNI instance for the process.
-    public static var jni: JNI! { // this should be set in "OnLoad" and so should always exist
+    nonisolated(unsafe) public static var jni: JNI! { // this should be set in "OnLoad" and so should always exist
         didSet {
             jniContext {
                 JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader() // cache the global class loader on initialization
@@ -750,7 +750,7 @@ public final class JClassLoader: JObject, @unchecked Sendable {
     private static let javaClass = try! JClass(name: "java/lang/ClassLoader", systemClass: true)
     private static let loadClassID = javaClass.getMethodID(name: "loadClass", sig: "(Ljava/lang/String;)Ljava/lang/Class;")!
 
-    public fileprivate(set) static var globalClassLoader: JClassLoader?
+    nonisolated(unsafe) public fileprivate(set) static var globalClassLoader: JClassLoader?
 
     /// Sets the current thread's ClassLoader to be the single global classLoader
     public static func setThreadClassLoader() {
