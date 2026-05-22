@@ -114,6 +114,9 @@ extension JNI {
 
         set {
             JavaVirtualMachine.setShared(newValue)
+            jniContext {
+                JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader() // cache the global class loader on initialization
+            }
         }
     }
 
