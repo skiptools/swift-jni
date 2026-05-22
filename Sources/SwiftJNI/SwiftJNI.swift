@@ -103,7 +103,7 @@ public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
     // We set the ClassLoader for the current thread to be the application ClassLoader, otherwise classes defined in the app may not be found when loaded from a natively-created thread when loaded via reflection
     // TODO: cache and optimize
     JClassLoader.setThreadClassLoader()
-    try block()
+    return try block()
 }
 
 #else
