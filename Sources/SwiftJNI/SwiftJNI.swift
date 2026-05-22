@@ -1,6 +1,6 @@
 // Copyright 2024–2026 Skip
 #if SWIFT_JAVA_JNI_CORE
-@_exported import SwiftJavaJNICore
+import SwiftJavaJNICore
 #else
 import CJNI
 #endif
