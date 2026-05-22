@@ -65,6 +65,82 @@ public var isJNIInitialized: Bool {
     JNI.jni != nil
 }
 
+#if SWIFT_JAVA_JNI_CORE
+public typealias JNI = SwiftJavaJNICore.JavaVirtualMachine
+
+extension JNI {
+    public static var jni: JNI! { // this should be set in "OnLoad" and so should always exist
+        get {
+            try! JavaVirtualMachine.shared()
+        }
+
+        set {
+            JavaVirtualMachine.setShared(newValue)
+            jniContext {
+                JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader() // cache the global class loader on initialization
+            }
+        }
+    }
+
+    // Normally we init the jni global ourselves in JNI_OnLoad
+    public convenience init(jvm: UnsafeMutablePointer<JavaVM?>) {
+        self.init(adoptingJVM: jvm)
+    }
+}
+
+extension JNI {
+    /// Perform an operation with the current thread's `JNIEnviPointer`.
+    public func withEnv<T>(_ block: (JNINativeInterface, JNIEnvPointer) throws -> T) rethrows -> T {
+        let env = try! environment()
+        return try block(env.pointee!.pointee, env)
+    }
+}
+
+/// Establish a context in which to perform JNI operations.
+///
+/// - Warning: You cannot initiate JNI operations from native code outside of a context.
+public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
+    // We set the ClassLoader for the current thread to be the application ClassLoader, otherwise classes defined in the app may not be found when loaded from a natively-created thread when loaded via reflection
+    // TODO: cache and optimize
+    JClassLoader.setThreadClassLoader()
+    try block()
+}
+
+#else
+/// Gateway to JVM and JNI functionality.
+public class JNI {
+    /// The single shared singleton JNI instance for the process.
+    nonisolated(unsafe) public static var jni: JNI! { // this should be set in "OnLoad" and so should always exist
+        didSet {
+            jniContext {
+                JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader() // cache the global class loader on initialization
+            }
+        }
+    }
+
+    /// Our reference to the Java Virtual Machine, to be set on init
+    let _jvm: UnsafeMutablePointer<JavaVM?>
+
+    // Normally we init the jni global ourselves in JNI_OnLoad
+    public init(jvm: UnsafeMutablePointer<JavaVM?>) {
+        self._jvm = jvm
+    }
+}
+
+extension JNI {
+    /// Perform an operation with the current thread's `JNIEnviPointer`.
+    public func withEnv<T>(_ block: (JNINativeInterface, JNIEnvPointer) throws -> T) rethrows -> T {
+        let jvm: JNIInvokeInterface = _jvm.pointee!.pointee
+        var tenv: UnsafeMutableRawPointer?
+        let threadStatus = jvm.GetEnv(_jvm, &tenv, JavaInt(JNI_VERSION_1_6))
+        guard threadStatus == JNI_OK else {
+            fatalError("SwiftJNI: you must perform JNI operations within a jniContext { ... } block")
+        }
+        let env = tenv!.assumingMemoryBound(to: JNIEnv?.self)
+        return try block(env.pointee!.pointee, env)
+    }
+}
+
 /// Establish a context in which to perform JNI operations.
 ///
 /// - Warning: You cannot initiate JNI operations from native code outside of a context.
@@ -102,76 +178,9 @@ public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
         fatalError("SwiftJNI: unexpected JNI thread status: \(threadStatus)")
     }
 }
-
-#if SWIFT_JAVA_JNI_CORE
-public typealias JNI = SwiftJavaJNICore.JavaVirtualMachine
-
-extension JNI {
-    public static var jni: JNI! { // this should be set in "OnLoad" and so should always exist
-        get {
-            try! JavaVirtualMachine.shared()
-        }
-
-        set {
-            JavaVirtualMachine.setShared(newValue)
-            jniContext {
-                JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader() // cache the global class loader on initialization
-            }
-        }
-    }
-
-    // Normally we init the jni global ourselves in JNI_OnLoad
-    public convenience init(jvm: UnsafeMutablePointer<JavaVM?>) {
-        self.init(adoptingJVM: jvm)
-    }
-
-    /// Our reference to the Java Virtual Machine, to be set on init
-    var _jvm: UnsafeMutablePointer<JavaVM?> {
-        get {
-            var jvm: UnsafeMutablePointer<JavaVM?>? = nil
-            let env = try! environment()
-            guard env.pointee!.pointee.GetJavaVM(env, &jvm) == JNI_OK, let jvm else {
-                fatalError("unable to call getJavaVM")
-            }
-            return jvm
-        }
-    }
-}
-#else
-/// Gateway to JVM and JNI functionality.
-public class JNI {
-    /// The single shared singleton JNI instance for the process.
-    nonisolated(unsafe) public static var jni: JNI! { // this should be set in "OnLoad" and so should always exist
-        didSet {
-            jniContext {
-                JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader() // cache the global class loader on initialization
-            }
-        }
-    }
-
-    /// Our reference to the Java Virtual Machine, to be set on init
-    let _jvm: UnsafeMutablePointer<JavaVM?>
-
-    // Normally we init the jni global ourselves in JNI_OnLoad
-    public init(jvm: UnsafeMutablePointer<JavaVM?>) {
-        self._jvm = jvm
-    }
-}
 #endif
 
 extension JNI {
-    /// Perform an operation with the current thread's `JNIEnviPointer`.
-    public func withEnv<T>(_ block: (JNINativeInterface, JNIEnvPointer) throws -> T) rethrows -> T {
-        let jvm: JNIInvokeInterface = _jvm.pointee!.pointee
-        var tenv: UnsafeMutableRawPointer?
-        let threadStatus = jvm.GetEnv(_jvm, &tenv, JavaInt(JNI_VERSION_1_6))
-        guard threadStatus == JNI_OK else {
-            fatalError("SwiftJNI: you must perform JNI operations within a jniContext { ... } block")
-        }
-        let env = tenv!.assumingMemoryBound(to: JNIEnv?.self)
-        return try block(env.pointee!.pointee, env)
-    }
-
     /// Same as `withEnv`, but also checks for any java exceptions. If an exception occurred,
     /// it will throw a `JavaException` and clear the JNI exception.
     public func withEnvThrowing<T>(options: JConvertibleOptions, _ block: (JNINativeInterface, JNIEnvPointer) throws -> T) throws -> T {
@@ -1395,7 +1404,7 @@ extension String: JObjectProtocol, JConvertible {
                 fatalError("Could not get characters from String")
             }
             defer { jni.ReleaseStringUTFChars(env, obj, chars) }
-            guard let str = String(validatingUTF8: chars) else {
+            guard let str = String(validatingCString: chars) else {
                 fatalError("Could not get valid UTF8 characters from String")
             }
             return str
@@ -1578,7 +1587,7 @@ extension JNI {
             }
         }
         let JAVA_HOME = getenv("JAVA_HOME")!
-        let javaHome = URL(fileURLWithPath: String(validatingUTF8: JAVA_HOME)!)
+        let javaHome = URL(fileURLWithPath: String(validatingCString: JAVA_HOME)!)
 
         let ext: String
         #if os(Windows)
