@@ -1,6 +1,20 @@
 // Copyright 2023–2026 Skip
 @testable import SwiftJNI
 import Testing
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
+import Foundation
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Android)
+import Android
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
 #if os(Android)
 let isAndroid = true
@@ -619,6 +633,132 @@ let isAndroid = false
     }
 
     // MARK: - Charset encoding (Android defaults can differ)
+
+    // MARK: - Thread-context ClassLoader cache (per-pthread)
+
+    /// After a `jniContext { }` block runs on the calling thread the per-pthread
+    /// cache should be marked, and `Thread.currentThread.getContextClassLoader()`
+    /// should match `JClassLoader.globalClassLoader`.
+    @Test func testThreadClassLoaderIsSetAfterJniContext() throws {
+        // We can't pre-assert the cache state from the test entry point because
+        // we don't know whether a previous test already populated it on this
+        // very pthread. Just verify that after `jniContext` runs, the mark is
+        // set and the thread context ClassLoader matches the global one.
+        try jniContext {
+            #expect(JClassLoader.threadClassLoaderHasBeenSet(),
+                    "setThreadClassLoader() should have marked the current pthread")
+            let global = try #require(JClassLoader.globalClassLoader,
+                                       "globalClassLoader must be populated after JNI init")
+            let threadLoader = try #require(try JThread.currentThread.getContextClassLoader(),
+                                             "current thread must have a context ClassLoader")
+            let same: Bool = JNI.jni.withEnv { jni, env in
+                jni.IsSameObject(env, threadLoader.ptr, global.ptr) == 1
+            }
+            #expect(same, "thread context ClassLoader should be the global ClassLoader")
+        }
+    }
+
+    /// While the cache mark is set, calling `setThreadClassLoader()` must be a
+    /// pure no-op: even if we clear Java's context ClassLoader out from under it,
+    /// the cached path should *not* reassign anything. We exercise this entirely
+    /// inside one `jniContext { }` so the test behaves the same in both modes
+    /// (Mode 1 invalidates the mark on detach at the end of `jniContext`).
+    @Test func testThreadClassLoaderCacheSkipsRedundantAssignment() throws {
+        try jniContext {
+            // Entering jniContext should have already run setThreadClassLoader
+            // (Mode 2 always; Mode 1 inside the JNI_EDETACHED attach branch). On
+            // Mode-1's JNI_OK branch (recursive / already-attached thread) the
+            // cache may still be clear — prime it explicitly so this test exercises
+            // the same cache state regardless of which branch we hit.
+            JClassLoader.setThreadClassLoader()
+            #expect(JClassLoader.threadClassLoaderHasBeenSet(),
+                    "cache must be marked after at least one setThreadClassLoader() call")
+
+            // Now drop Java's context ClassLoader and verify the cached call
+            // path doesn't restore it.
+            try JThread.currentThread.setContextClassLoader(nil)
+            JClassLoader.setThreadClassLoader()  // should be cached → no-op
+            let loader = try JThread.currentThread.getContextClassLoader()
+            #expect(loader == nil,
+                    "cached setThreadClassLoader() must not reassign the loader")
+
+            // Invalidate the mark and try again: the assignment should run now.
+            JClassLoader.invalidateThreadClassLoaderMark()
+            JClassLoader.setThreadClassLoader()
+            #expect(JClassLoader.threadClassLoaderHasBeenSet(),
+                    "cache must be re-marked after a real assignment")
+            let restored = try #require(try JThread.currentThread.getContextClassLoader())
+            let global = try #require(JClassLoader.globalClassLoader)
+            let same: Bool = JNI.jni.withEnv { jni, env in
+                jni.IsSameObject(env, restored.ptr, global.ptr) == 1
+            }
+            #expect(same, "restored context ClassLoader should be the global ClassLoader")
+        }
+    }
+
+    /// A natively-created pthread (not created by the JVM, not a Swift Task) must
+    /// be able to use the global ClassLoader after `jniContext` runs on it. This
+    /// is the load-bearing behavior of `setThreadClassLoader()`: reflection-based
+    /// lookups on a fresh native thread default to the boot ClassLoader, which
+    /// can't find app/test classes.
+    @Test func testJniContextOnNativePthread() throws {
+        // Box the result + any error across the pthread boundary.
+        final class PthreadResult: @unchecked Sendable {
+            var success: Bool = false
+            var failureMessage: String? = nil
+            var contextLoaderMatchedGlobal: Bool = false
+            var threadCachedAfterFirstCall: Bool = false
+            var loadedClassName: String? = nil
+        }
+        let result = PthreadResult()
+
+        // Run the body on a freshly-spawned pthread (POSIX). Using pthread_create
+        // directly — rather than `Foundation.Thread` or `Task.detached`, which
+        // may reuse pooled OS threads — guarantees the pthread_key starts empty.
+        let context = Unmanaged.passRetained(result).toOpaque()
+        var threadID: pthread_t? = nil
+        let createResult = pthread_create(&threadID, nil, { ctxRaw in
+            let ctx = Unmanaged<PthreadResult>.fromOpaque(ctxRaw).takeRetainedValue()
+            do {
+                // Cache must start clear on a brand-new pthread.
+                if JClassLoader.threadClassLoaderHasBeenSet() {
+                    ctx.failureMessage = "expected pthread to start with classloader cache unset"
+                    return nil
+                }
+
+                try jniContext {
+                    // First jniContext should set the loader and mark the cache.
+                    ctx.threadCachedAfterFirstCall = JClassLoader.threadClassLoaderHasBeenSet()
+
+                    // Pull the thread's context ClassLoader and compare to the global.
+                    if let loader = try JThread.currentThread.getContextClassLoader(),
+                       let global = JClassLoader.globalClassLoader {
+                        ctx.contextLoaderMatchedGlobal = JNI.jni.withEnv { jni, env in
+                            jni.IsSameObject(env, loader.ptr, global.ptr) == 1
+                        }
+                    }
+
+                    // Verify the global ClassLoader is actually usable for class
+                    // loading from this natively-created thread. `JClass(name:
+                    // systemClass: false)` routes through `globalClassLoader.loadClass`.
+                    let cls = try JClass(name: "java/util/ArrayList", systemClass: false)
+                    ctx.loadedClassName = cls.name
+                }
+                ctx.success = true
+            } catch {
+                ctx.failureMessage = "\(error)"
+            }
+            return nil
+        }, context)
+        precondition(createResult == 0, "pthread_create failed: \(createResult)")
+        pthread_join(threadID!, nil)
+
+        #expect(result.failureMessage == nil, "native pthread reported error: \(result.failureMessage ?? "")")
+        #expect(result.success, "native pthread did not complete its jniContext block")
+        #expect(result.threadCachedAfterFirstCall, "cache should be marked after the first jniContext on a native pthread")
+        #expect(result.contextLoaderMatchedGlobal, "native pthread's context ClassLoader should be the global ClassLoader")
+        #expect(result.loadedClassName == "java/util/ArrayList", "expected to load java/util/ArrayList via the global ClassLoader from the native pthread")
+    }
 
     @Test func testCharsetDefaultEncoding() throws {
         // Android historically defaulted to UTF-8, while older desktop JVMs used
