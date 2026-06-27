@@ -65,44 +65,6 @@ public var isJNIInitialized: Bool {
     JNI.jni != nil
 }
 
-/// Establish a context in which to perform JNI operations.
-///
-/// - Warning: You cannot initiate JNI operations from native code outside of a context.
-public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
-    precondition(JNI.jni != nil, "JNI.jni was unset")
-    precondition(JNI.jni._jvm.pointee != nil, "JNI.jni._jvm.pointee was nil")
-
-    let jvm: JNIInvokeInterface = JNI.jni._jvm.pointee!.pointee
-    var tenv: UnsafeMutableRawPointer?
-    let threadStatus = jvm.GetEnv(JNI.jni._jvm, &tenv, JavaInt(JNI_VERSION_1_6))
-
-    // Ensure that there is a `JNIEnvPointer` for the current thread
-    // See: https://developer.android.com/training/articles/perf-jni#threads
-    switch threadStatus {
-    case JNI_OK:
-        return try block()
-    case JNI_EDETACHED:
-        // we weren't attached to the Java thread; attach, perform the block, and then detach
-        var tenv: JNIEnvPointer!
-        if jvm.AttachCurrentThread(JNI.jni._jvm, &tenv, nil) != JNI_OK {
-            fatalError("SwiftJNI: unable to attach JNI to current thread")
-        }
-        defer {
-            if jvm.DetachCurrentThread(JNI.jni._jvm) != JNI_OK {
-                fatalError("SwiftJNI: unable to detach JNI from thread")
-            }
-        }
-
-        // We set the ClassLoader for the current thread to be the application ClassLoader, otherwise classes defined in the app may not be found when loaded from a natively-created thread when loaded via reflection
-        JClassLoader.setThreadClassLoader()
-        return try block()
-    case JNI_EVERSION:
-        fatalError("SwiftJNI: unsupported JNI version")
-    default:
-        fatalError("SwiftJNI: unexpected JNI thread status: \(threadStatus)")
-    }
-}
-
 #if SWIFT_JAVA_JNI_CORE
 public typealias JNI = SwiftJavaJNICore.JavaVirtualMachine
 
@@ -124,19 +86,32 @@ extension JNI {
     public convenience init(jvm: UnsafeMutablePointer<JavaVM?>) {
         self.init(adoptingJVM: jvm)
     }
+}
 
-    /// Our reference to the Java Virtual Machine, to be set on init
-    var _jvm: UnsafeMutablePointer<JavaVM?> {
-        get {
-            var jvm: UnsafeMutablePointer<JavaVM?>? = nil
-            let env = try! environment()
-            guard env.pointee!.pointee.GetJavaVM(env, &jvm) == JNI_OK, let jvm else {
-                fatalError("unable to call getJavaVM")
-            }
-            return jvm
-        }
+extension JNI {
+    /// Perform an operation with the current thread's `JNIEnviPointer`.
+    public func withEnv<T>(_ block: (JNINativeInterface, JNIEnvPointer) throws -> T) rethrows -> T {
+        let env = try! environment()
+        return try block(env.pointee!.pointee, env)
     }
 }
+
+/// Establish a context in which to perform JNI operations.
+///
+/// - Warning: You cannot initiate JNI operations from native code outside of a context.
+public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
+    // We set the ClassLoader for the current thread to be the application
+    // ClassLoader, otherwise classes defined in the app may not be found when
+    // loaded from a natively-created thread via reflection. `setThreadClassLoader`
+    // caches per-pthread, so after the first time on this native thread (or the
+    // first time after `globalClassLoader` was populated) this is just a
+    // pthread_getspecific check. With `SWIFT_JAVA_JNI_CORE=1` the thread is
+    // attached once for its lifetime, so the cache survives across all subsequent
+    // `jniContext { }` invocations on the same native thread.
+    JClassLoader.setThreadClassLoader()
+    return try block()
+}
+
 #else
 /// Gateway to JVM and JNI functionality.
 public class JNI {
@@ -157,7 +132,6 @@ public class JNI {
         self._jvm = jvm
     }
 }
-#endif
 
 extension JNI {
     /// Perform an operation with the current thread's `JNIEnviPointer`.
@@ -171,7 +145,65 @@ extension JNI {
         let env = tenv!.assumingMemoryBound(to: JNIEnv?.self)
         return try block(env.pointee!.pointee, env)
     }
+}
 
+/// Establish a context in which to perform JNI operations.
+///
+/// - Warning: You cannot initiate JNI operations from native code outside of a context.
+public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
+    precondition(JNI.jni != nil, "JNI.jni was unset")
+    precondition(JNI.jni._jvm.pointee != nil, "JNI.jni._jvm.pointee was nil")
+
+    let jvm: JNIInvokeInterface = JNI.jni._jvm.pointee!.pointee
+    var tenv: UnsafeMutableRawPointer?
+    let threadStatus = jvm.GetEnv(JNI.jni._jvm, &tenv, JavaInt(JNI_VERSION_1_6))
+
+    // Ensure that there is a `JNIEnvPointer` for the current thread
+    // See: https://developer.android.com/training/articles/perf-jni#threads
+    switch threadStatus {
+    case JNI_OK:
+        // Thread was already attached (either by Java calling into native code,
+        // or by a recursive `jniContext` on this same pthread). Leave the
+        // ClassLoader association alone in that case so we don't override
+        // whichever loader Java had set up.
+        return try block()
+    case JNI_EDETACHED:
+        // we weren't attached to the Java thread; attach, perform the block, and then detach
+        var tenv: JNIEnvPointer!
+        if jvm.AttachCurrentThread(JNI.jni._jvm, &tenv, nil) != JNI_OK {
+            fatalError("SwiftJNI: unable to attach JNI to current thread")
+        }
+        // A fresh attach gives us a brand-new Java-side thread record, so any
+        // ClassLoader we might have set on this pthread during a previous attach
+        // cycle is gone. Drop the cache so the upcoming `setThreadClassLoader()`
+        // call performs the real `Thread.setContextClassLoader` again.
+        JClassLoader.invalidateThreadClassLoaderMark()
+        defer {
+            // The detach destroys the Java-side ClassLoader association too, so
+            // invalidate again on the way out — the next `jniContext { }` on
+            // this native thread will hit `JNI_EDETACHED` and re-set.
+            JClassLoader.invalidateThreadClassLoaderMark()
+            if jvm.DetachCurrentThread(JNI.jni._jvm) != JNI_OK {
+                fatalError("SwiftJNI: unable to detach JNI from thread")
+            }
+        }
+
+        // We set the ClassLoader for the current thread to be the application
+        // ClassLoader, otherwise classes defined in the app may not be found
+        // when loaded from a natively-created thread via reflection. Cached
+        // per-pthread so nested `jniContext { }` calls inside the block are
+        // a `pthread_getspecific` no-op.
+        JClassLoader.setThreadClassLoader()
+        return try block()
+    case JNI_EVERSION:
+        fatalError("SwiftJNI: unsupported JNI version")
+    default:
+        fatalError("SwiftJNI: unexpected JNI thread status: \(threadStatus)")
+    }
+}
+#endif
+
+extension JNI {
     /// Same as `withEnv`, but also checks for any java exceptions. If an exception occurred,
     /// it will throw a `JavaException` and clear the JNI exception.
     public func withEnvThrowing<T>(options: JConvertibleOptions, _ block: (JNINativeInterface, JNIEnvPointer) throws -> T) throws -> T {
@@ -755,11 +787,66 @@ public final class JClassLoader: JObject, @unchecked Sendable {
 
     nonisolated(unsafe) public fileprivate(set) static var globalClassLoader: JClassLoader?
 
-    /// Sets the current thread's ClassLoader to be the single global classLoader
+    // MARK: Per-thread "classloader has been set" cache
+    //
+    // Setting the thread's context ClassLoader on every `jniContext { }` call is
+    // expensive: each call crosses into JNI to fetch `Thread.currentThread()` and
+    // invokes `Thread.setContextClassLoader`. In the `SWIFT_JAVA_JNI_CORE=1` path
+    // the native thread is attached *once* (a pthread destructor detaches it when
+    // the thread exits), so once we've assigned the context ClassLoader on a given
+    // native thread we don't need to do it again for the rest of that thread's
+    // lifetime. In the `SWIFT_JAVA_JNI_CORE=0` path the thread is detached at the
+    // end of each `jniContext { }`, which destroys the Java-side ClassLoader
+    // association — `jniContext` invalidates this cache around the detach so the
+    // next attach reassigns it.
+    //
+    // The cache is keyed off a `pthread_key_t`. The value is a sentinel raw
+    // pointer (`0x1`), so there's nothing to free in the pthread destructor.
+    nonisolated(unsafe) private static let threadClassLoaderSetKey: pthread_key_t = {
+        var k = pthread_key_t()
+        let result = pthread_key_create(&k, nil)
+        precondition(result == 0, "SwiftJNI: pthread_key_create failed with \(result)")
+        return k
+    }()
+
+    nonisolated(unsafe) private static let threadClassLoaderSetSentinel = UnsafeMutableRawPointer(bitPattern: 0x1)
+
+    /// Whether `setThreadClassLoader()` has already been performed on the current
+    /// native thread since the last time the cache was invalidated.
+    internal static func threadClassLoaderHasBeenSet() -> Bool {
+        return pthread_getspecific(threadClassLoaderSetKey) != nil
+    }
+
+    /// Mark the current native thread as having had its context ClassLoader set
+    /// to `globalClassLoader`.
+    fileprivate static func markThreadClassLoaderSet() {
+        pthread_setspecific(threadClassLoaderSetKey, threadClassLoaderSetSentinel)
+    }
+
+    /// Drop the "has been set" marker for the current native thread. The next
+    /// call to `setThreadClassLoader()` on this thread will actually invoke
+    /// `Thread.setContextClassLoader` again.
+    internal static func invalidateThreadClassLoaderMark() {
+        pthread_setspecific(threadClassLoaderSetKey, nil)
+    }
+
+    /// Sets the current thread's ClassLoader to be the single global classLoader.
+    ///
+    /// Cached per-pthread: subsequent calls on the same native thread are a no-op
+    /// until `invalidateThreadClassLoaderMark()` is called. The cache is also a
+    /// no-op when `globalClassLoader` is still nil (typically while JNI is being
+    /// initialized): the thread is not marked, so a later call — after the global
+    /// has been populated — will perform the assignment.
     public static func setThreadClassLoader() {
-        if let globalClassLoader {
-            try? JThread.currentThread.setContextClassLoader(globalClassLoader)
+        if threadClassLoaderHasBeenSet() {
+            return
         }
+        guard let globalClassLoader else {
+            // Don't mark the cache; we want to retry once the global is populated.
+            return
+        }
+        try? JThread.currentThread.setContextClassLoader(globalClassLoader)
+        markThreadClassLoaderSet()
     }
 
     fileprivate func loadClass(_ name: String) throws -> jclass {
@@ -1395,7 +1482,7 @@ extension String: JObjectProtocol, JConvertible {
                 fatalError("Could not get characters from String")
             }
             defer { jni.ReleaseStringUTFChars(env, obj, chars) }
-            guard let str = String(validatingUTF8: chars) else {
+            guard let str = String(validatingCString: chars) else {
                 fatalError("Could not get valid UTF8 characters from String")
             }
             return str
@@ -1461,6 +1548,16 @@ extension JNI {
     /// compat that just passes through to `JNI.shared()`
     public static func attachJVM(launch: Bool = false) throws {
         _ = try JNI.shared()
+        // `JNI.shared()` returns the existing VM without going through the
+        // `JNI.jni` setter that normally captures `globalClassLoader` on the
+        // initializing thread. Populate it here so that callers (and the
+        // per-thread `setThreadClassLoader()` cache) have something to install
+        // on natively-created threads.
+        jniContext {
+            if JClassLoader.globalClassLoader == nil {
+                JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader()
+            }
+        }
     }
 }
 #else
@@ -1578,7 +1675,7 @@ extension JNI {
             }
         }
         let JAVA_HOME = getenv("JAVA_HOME")!
-        let javaHome = URL(fileURLWithPath: String(validatingUTF8: JAVA_HOME)!)
+        let javaHome = URL(fileURLWithPath: String(validatingCString: JAVA_HOME)!)
 
         let ext: String
         #if os(Windows)
