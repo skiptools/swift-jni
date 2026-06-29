@@ -78,6 +78,7 @@ extension JNI {
             JavaVirtualMachine.setShared(newValue)
             jniContext {
                 JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader() // cache the global class loader on initialization
+                JThrowable.warmUp() // complete the exception-converter globals' one-time init in this clean context
             }
         }
     }
@@ -120,6 +121,7 @@ public class JNI {
         didSet {
             jniContext {
                 JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader() // cache the global class loader on initialization
+                JThrowable.warmUp() // complete the exception-converter globals' one-time init in this clean context
             }
         }
     }
@@ -203,6 +205,28 @@ public func jniContext<T>(_ block: () throws -> T) rethrows -> T {
 }
 #endif
 
+// Per-thread re-entrancy guard for the JThrowable exception converter. Higher layers
+// (e.g. SkipBridge's AnyBridging) replace `JThrowable.errorConverter` with one that
+// lazily initializes bridge `JClass` globals. If converting one Java exception triggers
+// another JNI fault whose conversion re-references a still-initializing global, the
+// non-reentrant `swift_once` guarding that global would self-deadlock. While a conversion
+// is already in progress on this native thread we therefore skip the converter and throw a
+// lightweight, JNI-free `ThrowableError` instead. Keyed off a `pthread_key_t` (mirrors
+// `JClassLoader`'s per-pthread mark); the value is a sentinel raw pointer.
+nonisolated(unsafe) private let jniExceptionConvertingKey: pthread_key_t = {
+    var key = pthread_key_t()
+    let result = pthread_key_create(&key, nil)
+    precondition(result == 0, "SwiftJNI: pthread_key_create failed with \(result)")
+    return key
+}()
+nonisolated(unsafe) private let jniExceptionConvertingSentinel = UnsafeMutableRawPointer(bitPattern: 0x1)
+private func jniIsConvertingException() -> Bool {
+    pthread_getspecific(jniExceptionConvertingKey) != nil
+}
+private func jniSetConvertingException(_ converting: Bool) {
+    pthread_setspecific(jniExceptionConvertingKey, converting ? jniExceptionConvertingSentinel : nil)
+}
+
 extension JNI {
     /// Same as `withEnv`, but also checks for any java exceptions. If an exception occurred,
     /// it will throw a `JavaException` and clear the JNI exception.
@@ -216,6 +240,15 @@ extension JNI {
     public func checkExceptionAndThrow(options: JConvertibleOptions) throws {
         if let throwable = self.exceptionOccurred() {
             self.exceptionClear()
+            if jniIsConvertingException() {
+                // Already converting a Java exception on this thread: do not re-enter the
+                // converter (which higher layers may have replaced with one that lazily
+                // initializes bridge `JClass` globals). Re-entry risks a non-reentrant
+                // `swift_once` self-deadlock, so fall back to a JNI-free description.
+                throw ThrowableError(description: "A Java exception was raised while already converting another Java exception (re-entrancy suppressed)")
+            }
+            jniSetConvertingException(true)
+            defer { jniSetConvertingException(false) }
             throw JThrowable(throwable).toError(options: options)
         }
     }
@@ -845,8 +878,23 @@ public final class JClassLoader: JObject, @unchecked Sendable {
             // Don't mark the cache; we want to retry once the global is populated.
             return
         }
-        try? JThread.currentThread.setContextClassLoader(globalClassLoader)
+        // Mark the thread BEFORE performing the assignment, not after. Setting the
+        // context ClassLoader creates and releases a temporary `JThread`, whose
+        // `deinit` makes a JNI call (DeleteGlobalRef) that re-enters
+        // `jniContext` -> `setThreadClassLoader()` on this same pthread. If the
+        // mark were only set afterwards, that re-entrant call would not observe it
+        // and would recurse; while a Java exception is pending, that recursion
+        // drives the exception converter (`checkExceptionAndThrow` ->
+        // `JThrowable.toError` -> `AnyBridging`) into a re-entrant `swift_once` on
+        // a lazily-initialized bridge `JClass` global, which deadlocks forever.
+        // Marking first makes the nested call a `pthread_getspecific` no-op.
         markThreadClassLoaderSet()
+        do {
+            try JThread.currentThread.setContextClassLoader(globalClassLoader)
+        } catch {
+            // The assignment failed; drop the mark so a later call retries it.
+            invalidateThreadClassLoaderMark()
+        }
     }
 
     fileprivate func loadClass(_ name: String) throws -> jclass {
@@ -881,6 +929,25 @@ public final class JThrowable: JObject, @unchecked Sendable {
     /// Handles converting the error pointer into the error that will ultimately be thrown
     nonisolated(unsafe) public static var errorConverter: ((JavaObjectPointer, JConvertibleOptions) -> Error?) = { ptr, options in descriptionToError(ptr, options: options) }
 
+    /// Eagerly force the exception converter's lazily-initialized global `JClass`/method-ID handles
+    /// to complete their one-time (`swift_once`) initialization in a clean, exception-free context.
+    /// Called once when the shared JNI is established (after `globalClassLoader` is cached). Were one
+    /// of these instead first initialized lazily from inside a JNI exception check, a nested fault
+    /// could re-enter its still-running `swift_once` and self-deadlock. Idempotent.
+    public static func warmUp() {
+        _ = javaClass
+        _ = toStringID
+        _ = getMessageID
+        // `skip.lib.ErrorException` (the outbound converter's class) may not be on the classpath this
+        // early — e.g. during host JNI init before the test classpath is established — so only force
+        // its globals when the class actually resolves; otherwise they initialize lazily later (and
+        // the outbound re-entrancy guard protects that path). Avoids a `try!` ClassNotFoundException.
+        if (try? JClass(name: "skip/lib/ErrorException")) != nil {
+            _ = javaErrorExceptionClass
+            _ = javaErrorExceptionConstructor
+        }
+    }
+
     public static func toError(_ ptr: JavaObjectPointer?, options: JConvertibleOptions) -> Error? {
         guard let ptr else {
             return nil
@@ -897,6 +964,14 @@ public final class JThrowable: JObject, @unchecked Sendable {
         guard let error else {
             return nil
         }
+        // Mirror the inbound `checkExceptionAndThrow` re-entrancy guard for the OUTBOUND
+        // (Swift error -> Kotlin) conversion: building/marshaling the throwable can lazily
+        // initialize a bridge `JClass`, and a JNI fault during that init must not re-enter a
+        // converter that re-references a still-initializing global. Capture/restore (rather than a
+        // hard-false clear) so an outbound conversion nested inside an inbound one composes.
+        let wasConverting = jniIsConvertingException()
+        jniSetConvertingException(true)
+        defer { jniSetConvertingException(wasConverting) }
         guard let convertibleError = error as? JConvertible else {
             return descriptionToThrowable(error, options: options)
         }
@@ -1557,6 +1632,7 @@ extension JNI {
             if JClassLoader.globalClassLoader == nil {
                 JClassLoader.globalClassLoader = try? JThread.currentThread.getContextClassLoader()
             }
+            JThrowable.warmUp() // complete the exception-converter globals' one-time init in this clean context
         }
     }
 }

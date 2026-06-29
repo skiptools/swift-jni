@@ -4,7 +4,7 @@ import PackageDescription
 let jniDependency: Target.Dependency
 let swiftSettings: [SwiftSetting]
 
-let useSwiftJavaJNICore = (Context.environment["SWIFT_JAVA_JNI_CORE"] ?? "0") == "1"
+let useSwiftJavaJNICore = (Context.environment["SWIFT_JAVA_JNI_CORE"] ?? "1") == "1"
 
 if useSwiftJavaJNICore {
     // use swift-java-jni-core
@@ -36,6 +36,6 @@ let package = Package(
 
 if useSwiftJavaJNICore {
     package.dependencies += [
-        .package(url: "https://github.com/swiftlang/swift-java-jni-core.git", from: "0.5.1"),
+        .package(url: "https://github.com/swiftlang/swift-java-jni-core.git", "0.5.1"..<"2.0.0"),
     ]
 }
