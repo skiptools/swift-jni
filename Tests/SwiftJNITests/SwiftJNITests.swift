@@ -716,9 +716,23 @@ let isAndroid = false
         // directly — rather than `Foundation.Thread` or `Task.detached`, which
         // may reuse pooled OS threads — guarantees the pthread_key starts empty.
         let context = Unmanaged.passRetained(result).toOpaque()
+        // `pthread_t` is a nullable pointer on Darwin (so `pthread_create` takes
+        // `UnsafeMutablePointer<pthread_t?>`) but an integer type on Glibc/Musl/Android
+        // (so it takes `UnsafeMutablePointer<pthread_t>`); declare it accordingly.
+        #if canImport(Darwin)
         var threadID: pthread_t? = nil
+        #else
+        var threadID = pthread_t()
+        #endif
         let createResult = pthread_create(&threadID, nil, { ctxRaw in
-            let ctx = Unmanaged<PthreadResult>.fromOpaque(ctxRaw).takeRetainedValue()
+            // The start-routine argument is non-optional on Darwin but optional on
+            // Glibc/Musl/Android; normalize to a non-optional raw pointer.
+            #if canImport(Darwin)
+            let raw = ctxRaw
+            #else
+            let raw = ctxRaw!
+            #endif
+            let ctx = Unmanaged<PthreadResult>.fromOpaque(raw).takeRetainedValue()
             do {
                 // Cache must start clear on a brand-new pthread.
                 if JClassLoader.threadClassLoaderHasBeenSet() {
@@ -751,7 +765,12 @@ let isAndroid = false
             return nil
         }, context)
         precondition(createResult == 0, "pthread_create failed: \(createResult)")
+        // `threadID` is optional on Darwin, non-optional elsewhere.
+        #if canImport(Darwin)
         pthread_join(threadID!, nil)
+        #else
+        pthread_join(threadID, nil)
+        #endif
 
         #expect(result.failureMessage == nil, "native pthread reported error: \(result.failureMessage ?? "")")
         #expect(result.success, "native pthread did not complete its jniContext block")
