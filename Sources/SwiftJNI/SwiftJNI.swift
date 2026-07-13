@@ -1391,14 +1391,21 @@ extension String: JObjectProtocol, JConvertible {
 
     public static func fromJavaObject(_ obj: JavaObjectPointer?, options: JConvertibleOptions) -> String {
         JNI.jni.withEnv { jni, env in
-            guard let chars = jni.GetStringUTFChars(env, obj, nil) else {
+            let count = Int(jni.GetStringLength(env, obj))
+            guard let chars = jni.GetStringChars(env, obj, nil) else {
                 fatalError("Could not get characters from String")
             }
-            defer { jni.ReleaseStringUTFChars(env, obj, chars) }
-            guard let str = String(validatingUTF8: chars) else {
-                fatalError("Could not get valid UTF8 characters from String")
-            }
-            return str
+            defer { jni.ReleaseStringChars(env, obj, chars) }
+
+            // JNI's GetStringUTFChars returns modified UTF-8, where NUL and
+            // supplementary-plane scalars are not encoded as standard UTF-8.
+            // Java strings are UTF-16; consume that representation directly so
+            // valid supplementary characters and embedded NUL round-trip, while
+            // Swift repairs an isolated surrogate rather than aborting.
+            return String(
+                decoding: UnsafeBufferPointer(start: chars, count: count),
+                as: UTF16.self
+            )
         }
     }
 

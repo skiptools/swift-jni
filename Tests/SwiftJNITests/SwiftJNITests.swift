@@ -113,7 +113,7 @@ let isAndroid = false
     @Test func testStringBMPCharacters() throws {
         // Basic multilingual plane — should work identically everywhere
         jniContext {
-            let testStrings = ["hello", "héllo", "日本語", "مرحبا"]
+            let testStrings = ["", "hello", "héllo", "日本語", "مرحبا"]
             for str in testStrings {
                 let jstr = str.toJavaObject(options: [])
                 let roundTripped = String.fromJavaObject(jstr, options: [])
@@ -122,12 +122,9 @@ let isAndroid = false
         }
     }
 
-    @Test(.disabled("crashes")) func testStringSupplementaryPlane() throws {
+    @Test func testStringSupplementaryPlane() throws {
         // Characters outside BMP (U+10000+) use surrogate pairs in Java's UTF-16.
-        // toJavaObject uses NewString (UTF-16) which correctly handles these.
-        // Note: fromJavaObject uses GetStringUTFChars (Modified UTF-8) which cannot
-        // represent supplementary plane characters in standard UTF-8, so we verify
-        // via Java's String.length() and codePointCount() instead of round-tripping.
+        // Both conversion directions use UTF-16 and must round-trip exactly.
         try jniContext {
             let stringClass = try JClass(name: "java/lang/String", systemClass: true)
             let lengthMethod = try #require(stringClass.getMethodID(name: "length", sig: "()I"))
@@ -136,6 +133,7 @@ let isAndroid = false
             // "🎵🎶" = 2 code points, 4 UTF-16 code units (each is a surrogate pair)
             let emoji = "🎵🎶"
             let jstr = emoji.toJavaObject(options: [])!
+            #expect(String.fromJavaObject(jstr, options: []) == emoji)
             let utf16Len: Int32 = try jstr.call(method: lengthMethod, options: [], args: [])
             #expect(utf16Len == 4, "Two supplementary characters = 4 UTF-16 code units")
 
@@ -147,23 +145,37 @@ let isAndroid = false
             // Mixed BMP + supplementary: "A🎵B" = 3 code points, 4 UTF-16 code units
             let mixed = "A🎵B"
             let jmixed = mixed.toJavaObject(options: [])!
+            #expect(String.fromJavaObject(jmixed, options: []) == mixed)
             let mixedLen: Int32 = try jmixed.call(method: lengthMethod, options: [], args: [])
             #expect(mixedLen == 4) // 'A' + surrogate pair + 'B'
         }
     }
 
     @Test func testStringWithEmbeddedNull() throws {
-        // Java strings can contain \0. Verify the UTF-16 encoding path preserves it.
-        // Note: round-trip via fromJavaObject may fail since GetStringUTFChars uses
-        // Modified UTF-8 where \0 becomes 0xC0 0x80, so we verify via Java's length().
+        // Java strings can contain \0. The UTF-16 path must preserve it exactly.
         try jniContext {
             let str = "before\0after"
             let jstr = str.toJavaObject(options: [])!
+            #expect(String.fromJavaObject(jstr, options: []) == str)
 
             let stringClass = try JClass(name: "java/lang/String", systemClass: true)
             let lengthMethod = try #require(stringClass.getMethodID(name: "length", sig: "()I"))
             let jlen: Int32 = try jstr.call(method: lengthMethod, options: [], args: [])
             #expect(jlen == Int32(str.utf16.count))
+        }
+    }
+
+    @Test func testStringWithIsolatedSurrogatesRepairsInsteadOfCrashing() throws {
+        try jniContext {
+            for codeUnit: JavaChar in [0xD800, 0xDC00] {
+                let units = [codeUnit]
+                let jstr = try #require(JNI.jni.withEnv { jni, env in
+                    units.withUnsafeBufferPointer {
+                        jni.NewString(env, $0.baseAddress, JavaInt($0.count))
+                    }
+                })
+                #expect(String.fromJavaObject(jstr, options: []) == "\u{FFFD}")
+            }
         }
     }
 
