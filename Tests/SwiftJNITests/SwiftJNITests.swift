@@ -122,12 +122,9 @@ let isAndroid = false
         }
     }
 
-    @Test(.disabled("crashes")) func testStringSupplementaryPlane() throws {
-        // Characters outside BMP (U+10000+) use surrogate pairs in Java's UTF-16.
-        // toJavaObject uses NewString (UTF-16) which correctly handles these.
-        // Note: fromJavaObject uses GetStringUTFChars (Modified UTF-8) which cannot
-        // represent supplementary plane characters in standard UTF-8, so we verify
-        // via Java's String.length() and codePointCount() instead of round-tripping.
+    @Test func testStringSupplementaryPlane() throws {
+        // Characters outside BMP (U+10000+) use surrogate pairs in Java's UTF-16,
+        // which GetStringUTFChars returns as invalid UTF-8 on desktop JVMs, so fromJavaObject falls back to UTF-16.
         try jniContext {
             let stringClass = try JClass(name: "java/lang/String", systemClass: true)
             let lengthMethod = try #require(stringClass.getMethodID(name: "length", sig: "()I"))
@@ -149,13 +146,16 @@ let isAndroid = false
             let jmixed = mixed.toJavaObject(options: [])!
             let mixedLen: Int32 = try jmixed.call(method: lengthMethod, options: [], args: [])
             #expect(mixedLen == 4) // 'A' + surrogate pair + 'B'
+
+            for str in [emoji, mixed, "Fed 🇺🇸 📉"] {
+                #expect(String.fromJavaObject(str.toJavaObject(options: []), options: []) == str, "Round-trip failed for: \(str)")
+            }
         }
     }
 
     @Test func testStringWithEmbeddedNull() throws {
         // Java strings can contain \0. Verify the UTF-16 encoding path preserves it.
-        // Note: round-trip via fromJavaObject may fail since GetStringUTFChars uses
-        // Modified UTF-8 where \0 becomes 0xC0 0x80, so we verify via Java's length().
+        // GetStringUTFChars uses Modified UTF-8 where \0 becomes 0xC0 0x80, so fromJavaObject falls back to UTF-16.
         try jniContext {
             let str = "before\0after"
             let jstr = str.toJavaObject(options: [])!
@@ -164,6 +164,7 @@ let isAndroid = false
             let lengthMethod = try #require(stringClass.getMethodID(name: "length", sig: "()I"))
             let jlen: Int32 = try jstr.call(method: lengthMethod, options: [], args: [])
             #expect(jlen == Int32(str.utf16.count))
+            #expect(String.fromJavaObject(jstr, options: []) == str)
         }
     }
 
